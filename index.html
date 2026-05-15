@@ -46,29 +46,13 @@
             100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
         }
 
-        /* Waveform bars */
+        /* Waveform bars (heights driven by JS via Web Audio API) */
         .waveform { display: flex; align-items: center; gap: 3px; height: 32px; }
         .wave-bar {
             width: 3px; border-radius: 2px;
             background: linear-gradient(to top, #6366f1, #a78bfa);
-            animation: wave 0.8s ease-in-out infinite;
-            transform-origin: bottom;
-        }
-        .wave-bar:nth-child(1)  { height: 40%; animation-delay: 0.00s; }
-        .wave-bar:nth-child(2)  { height: 70%; animation-delay: 0.10s; }
-        .wave-bar:nth-child(3)  { height: 55%; animation-delay: 0.20s; }
-        .wave-bar:nth-child(4)  { height: 90%; animation-delay: 0.05s; }
-        .wave-bar:nth-child(5)  { height: 65%; animation-delay: 0.15s; }
-        .wave-bar:nth-child(6)  { height: 100%; animation-delay: 0.25s; }
-        .wave-bar:nth-child(7)  { height: 75%; animation-delay: 0.08s; }
-        .wave-bar:nth-child(8)  { height: 50%; animation-delay: 0.18s; }
-        .wave-bar:nth-child(9)  { height: 80%; animation-delay: 0.12s; }
-        .wave-bar:nth-child(10) { height: 45%; animation-delay: 0.22s; }
-        .wave-bar:nth-child(11) { height: 60%; animation-delay: 0.06s; }
-        .wave-bar:nth-child(12) { height: 35%; animation-delay: 0.16s; }
-        @keyframes wave {
-            0%, 100% { transform: scaleY(0.4); }
-            50%       { transform: scaleY(1.0); }
+            height: 15%;
+            transition: height 0.05s ease-out;
         }
 
         /* Interim text typing cursor */
@@ -107,7 +91,7 @@
                 <p class="text-slate-400 text-sm mt-1">音声を構造化データへ変換するワークフロー</p>
             </div>
             <div class="flex items-center gap-3">
-                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-3 py-1">v1.5.1</span>
+                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-3 py-1">v1.6.0</span>
                 <button onclick="toggleSettings()" class="glass px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
                     <i class="fas fa-sliders text-indigo-400"></i>
                     <span class="text-sm font-semibold">Settings</span>
@@ -208,7 +192,7 @@
                         <span class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Transcription Source</span>
                         <div class="flex items-center gap-3">
                             <button onclick="copySource()" class="text-[10px] text-slate-600 hover:text-indigo-400 transition-colors">
-                                <i class="fas fa-copy mr-1"></i>全コピー
+                                <i class="fas fa-copy mr-1"></i>Copy
                             </button>
                             <span id="char-count" class="text-[10px] text-slate-600">0 characters</span>
                             <button onclick="clearSource()" class="text-[10px] text-slate-600 hover:text-red-400 transition-colors">
@@ -285,7 +269,7 @@
         </main>
 
         <footer class="mt-20 mb-10 text-center opacity-30 text-[10px] tracking-widest">
-            AUDIO INSIGHT CONSOLE v1.5.1 &copy; 2024
+            AUDIO INSIGHT CONSOLE v1.6.0 &copy; 2024
         </footer>
     </div>
 
@@ -330,7 +314,7 @@
     </div>
 
     <script>
-        const APP_VERSION = 'v1.5.1';
+        const APP_VERSION = 'v1.6.0';
 
         const state = {
             file: null,
@@ -585,6 +569,50 @@
             }
         }
 
+        // ── Realtime waveform via Web Audio API ───────────────────
+        const waveAudio = {
+            ctx: null, analyser: null, source: null,
+            stream: null, rafId: null,
+            bars: null
+        };
+
+        async function startWaveform() {
+            waveAudio.bars = Array.from(el.waveform.querySelectorAll('.wave-bar'));
+            try {
+                waveAudio.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                waveAudio.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                waveAudio.analyser = waveAudio.ctx.createAnalyser();
+                waveAudio.analyser.fftSize = 64;
+                waveAudio.source = waveAudio.ctx.createMediaStreamSource(waveAudio.stream);
+                waveAudio.source.connect(waveAudio.analyser);
+                drawWave();
+            } catch (e) {
+                // マイク権限なし時は無視（SpeechRecognitionがエラーを出す）
+            }
+        }
+
+        function drawWave() {
+            const data = new Uint8Array(waveAudio.analyser.frequencyBinCount);
+            waveAudio.analyser.getByteFrequencyData(data);
+            const bars = waveAudio.bars;
+            const step = Math.floor(data.length / bars.length);
+            bars.forEach((bar, i) => {
+                const val = data[i * step] / 255;
+                const pct = Math.max(8, Math.round(val * 100));
+                bar.style.height = `${pct}%`;
+            });
+            waveAudio.rafId = requestAnimationFrame(drawWave);
+        }
+
+        function stopWaveform() {
+            cancelAnimationFrame(waveAudio.rafId);
+            waveAudio.source?.disconnect();
+            waveAudio.stream?.getTracks().forEach(t => t.stop());
+            waveAudio.ctx?.close();
+            waveAudio.ctx = null;
+            if (waveAudio.bars) waveAudio.bars.forEach(b => b.style.height = '15%');
+        }
+
         // ── Speech Recognition → auto-flow to source ─────────────
         function initSpeech() {
             window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -610,6 +638,7 @@
                 el.recBadge.style.display = 'flex';
                 el.livePreview.textContent = '';
                 el.livePreview.classList.add('typing-cursor');
+                startWaveform();
             };
 
             rec.onresult = (e) => {
@@ -627,6 +656,7 @@
 
             rec.onend = () => {
                 state.isRecording = false;
+                stopWaveform();
                 el.micBtn.className = 'mic-btn-idle w-16 h-16 rounded-full flex items-center justify-center text-2xl text-indigo-300';
                 el.micIcon.className = 'fas fa-microphone';
                 el.waveform.style.display = 'none';
