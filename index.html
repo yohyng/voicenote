@@ -107,7 +107,7 @@
                 <p class="text-slate-400 text-sm mt-1">音声を構造化データへ変換するワークフロー</p>
             </div>
             <div class="flex items-center gap-3">
-                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-3 py-1">v1.5.0</span>
+                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-3 py-1">v1.5.1</span>
                 <button onclick="toggleSettings()" class="glass px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
                     <i class="fas fa-sliders text-indigo-400"></i>
                     <span class="text-sm font-semibold">Settings</span>
@@ -282,7 +282,7 @@
         </main>
 
         <footer class="mt-20 mb-10 text-center opacity-30 text-[10px] tracking-widest">
-            AUDIO INSIGHT CONSOLE v1.5.0 &copy; 2024
+            AUDIO INSIGHT CONSOLE v1.5.1 &copy; 2024
         </footer>
     </div>
 
@@ -327,7 +327,7 @@
     </div>
 
     <script>
-        const APP_VERSION = 'v1.5.0';
+        const APP_VERSION = 'v1.5.1';
 
         const state = {
             file: null,
@@ -540,7 +540,15 @@
                                             data: base64
                                         }
                                     },
-                                    { text: 'この音声を正確に文字起こしてください。話者が複数いる場合は「話者A:」のように区別してください。句読点を適切に付けてください。' }
+                                    { text: `この音声を文字起こししてください。以下のルールに従ってください。
+
+- 話者が複数いる場合は声の特徴から話者を推測し、「話者A」「話者B」のようにラベルを付けてください。話者が1人の場合はラベル不要です。
+- 各発言の先頭にタイムスタンプを [HH:MM:SS] 形式で付けてください。
+- 出力フォーマット（複数話者の例）:
+  [00:00:03] 話者A: こんにちは、本日はよろしくお願いします。
+  [00:00:06] 話者B: よろしくお願いします。
+- 句読点を適切に付け、聞き取れない箇所は [unclear] と記載してください。
+- 余計な説明や前置きは不要です。書き起こしテキストのみ出力してください。` }
                                 ]
                             }]
                         })
