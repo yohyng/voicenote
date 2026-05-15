@@ -624,6 +624,10 @@
             state.file = null;
             el.fileInput.value = '';
             el.fileInfo.classList.add('hidden');
+            el.fileInfo.style.display = '';
+            document.getElementById('clear-file-btn').disabled = false;
+            document.getElementById('transcribe-btn').style.display = 'flex';
+            document.getElementById('transcribe-progress').style.display = 'none';
         }
 
         // ── Transcription progress helpers ────────────────────────
