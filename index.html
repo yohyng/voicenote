@@ -758,16 +758,7 @@
                 }, 500);
                 crawlDone.then(() => clearInterval(crawlTimer));
 
-                const res = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/${state.activeModel}:generateContent?key=${state.apiKey}`,
-                    {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{
-                                parts: [
-                                    { inlineData: { mimeType: state.file.type || 'audio/mpeg', data: base64 } },
-                                    { text: `この音声を文字起こししてください。以下のルールに従ってください。
+                const transcribePrompt = `この音声を文字起こししてください。以下のルールに従ってください。
 
 - 話者が複数いる場合は声の特徴から話者を推測し、「話者A」「話者B」のようにラベルを付けてください。話者が1人の場合はラベル不要です。
 - 各発言の先頭にタイムスタンプを [HH:MM:SS] 形式で付けてください。
@@ -775,22 +766,47 @@
   [00:00:03] 話者A: こんにちは、本日はよろしくお願いします。
   [00:00:06] 話者B: よろしくお願いします。
 - 句読点を適切に付け、聞き取れない箇所は [unclear] と記載してください。
-- 余計な説明や前置きは不要です。書き起こしテキストのみ出力してください。` }
-                                ]
-                            }]
-                        })
+- 余計な説明や前置きは不要です。書き起こしテキストのみ出力してください。`;
+
+                let transcript = null;
+                let lastErr = null;
+
+                for (const model of CANDIDATE_MODELS) {
+                    const res = await fetch(
+                        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${state.apiKey}`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                contents: [{ parts: [
+                                    { inlineData: { mimeType: state.file.type || 'audio/mpeg', data: base64 } },
+                                    { text: transcribePrompt }
+                                ]}]
+                            })
+                        }
+                    );
+                    const data = await res.json();
+                    if (res.ok) {
+                        transcript = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+                        state.activeModel = model;
+                        break;
                     }
-                );
+                    if (isQuotaError(data)) {
+                        const retryMatch = (data?.error?.message ?? '').match(/retry in ([\d.]+)s/i);
+                        const wait = retryMatch ? `（${Math.ceil(parseFloat(retryMatch[1]))}秒後に再試行）` : '';
+                        lastErr = `クォータ超過 ${wait}`;
+                        continue;
+                    }
+                    lastErr = data?.error?.message ?? `HTTP ${res.status}`;
+                    break;
+                }
 
                 // Stop crawl, jump to 90%
                 crawlResolve();
                 clearInterval(cycleInterval);
                 await tickTo(crawlPct, 90, 200);
 
-                const data = await res.json();
-                if (!res.ok) throw new Error(data?.error?.message ?? `HTTP ${res.status}`);
-                const transcript = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-                if (!transcript) throw new Error('書き起こし結果が空です');
+                if (!transcript) throw new Error(lastErr ?? '書き起こし結果が空です');
 
                 // Step 4: Done  90→100%
                 setProgStep('done');
@@ -1078,24 +1094,29 @@
             ]);
 
             try {
-                const res = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/${state.activeModel}:generateContent?key=${state.apiKey}`,
-                    {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{ parts: [{ text: prompt }] }]
-                        })
-                    }
-                );
-                const data = await res.json();
-                if (!res.ok) throw new Error(data?.error?.message ?? `HTTP ${res.status}`);
+                let output = null;
+                let lastErr = null;
 
-                const output = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-                if (!output) throw new Error('レスポンスが空です');
+                for (const model of CANDIDATE_MODELS) {
+                    const { ok, data } = await callGemini(state.apiKey, model, prompt);
+                    if (ok) {
+                        output = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+                        state.activeModel = model;
+                        break;
+                    }
+                    if (isQuotaError(data)) {
+                        const retryMatch = (data?.error?.message ?? '').match(/retry in ([\d.]+)s/i);
+                        const wait = retryMatch ? `（${Math.ceil(parseFloat(retryMatch[1]))}秒後に再試行）` : '';
+                        lastErr = `クォータ超過 ${wait}`;
+                        continue;
+                    }
+                    lastErr = data?.error?.message ?? `HTTP ${data?.error?.status}`;
+                    break;
+                }
+
+                if (!output) throw new Error(lastErr ?? 'レスポンスが空です');
 
                 finishProgress();
-                // Render with basic markdown-like formatting
                 el.resultArea.innerHTML = `<div class="whitespace-pre-wrap">${escapeHtml(output)}</div>`;
                 el.resultArea.scrollTop = 0;
                 showToast('解析完了', 'green');
