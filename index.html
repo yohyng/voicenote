@@ -64,8 +64,20 @@
         }
         @keyframes blink { 50% { opacity: 0; } }
 
-        /* Progress bar */
-        #progress-bar-fill { transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+        /* Analysis button active state */
+        .analysis-btn { cursor: pointer; }
+        .analysis-btn:hover { background: rgba(99,102,241,0.08); }
+        .analysis-btn.active {
+            background: rgba(99,102,241,0.15) !important;
+            border-color: rgba(99,102,241,0.5) !important;
+        }
+
+        /* Prompt panel slide-in */
+        #prompt-panel { animation: slide-down 0.2s ease-out; }
+        @keyframes slide-down {
+            from { opacity: 0; transform: translateY(-8px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
 
         /* File upload processing state */
         @keyframes shimmer {
@@ -91,7 +103,7 @@
                 <p class="text-slate-400 text-xs md:text-sm mt-1">音声を構造化データへ変換するワークフロー</p>
             </div>
             <div class="flex items-center gap-2 md:gap-3">
-                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.0.0</span>
+                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.1.0</span>
                 <button onclick="toggleSettings()" class="glass px-3 md:px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
                     <i class="fas fa-sliders text-indigo-400"></i>
                     <span class="hidden md:inline text-sm font-semibold">Settings</span>
@@ -257,24 +269,58 @@
                     <span class="step-badge">Step 2</span>
                     <h2 class="text-lg font-bold">AI解析メニュー</h2>
                 </div>
+
+                <!-- Analysis type buttons -->
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-                    <button onclick="runAnalysis('minutes')" class="glass p-4 md:p-4 rounded-2xl hover:bg-indigo-500/10 active:bg-indigo-500/20 border border-transparent hover:border-indigo-500/40 transition-all text-center group">
+                    <button id="btn-minutes" onclick="selectAnalysis('minutes')"
+                        class="analysis-btn glass p-4 rounded-2xl border border-transparent transition-all text-center group">
                         <i class="fas fa-file-contract text-2xl md:text-xl text-indigo-400 mb-2 block group-hover:scale-110 transition-transform"></i>
                         <div class="text-xs font-bold">議事録作成</div>
                     </button>
-                    <button onclick="runAnalysis('summary')" class="glass p-4 md:p-4 rounded-2xl hover:bg-purple-500/10 active:bg-purple-500/20 border border-transparent hover:border-purple-500/40 transition-all text-center group">
+                    <button id="btn-summary" onclick="selectAnalysis('summary')"
+                        class="analysis-btn glass p-4 rounded-2xl border border-transparent transition-all text-center group">
                         <i class="fas fa-compress-alt text-2xl md:text-xl text-purple-400 mb-2 block group-hover:scale-110 transition-transform"></i>
                         <div class="text-xs font-bold">要約・ポイント</div>
                     </button>
-                    <button onclick="runAnalysis('tasks')" class="glass p-4 md:p-4 rounded-2xl hover:bg-emerald-500/10 active:bg-emerald-500/20 border border-transparent hover:border-emerald-500/40 transition-all text-center group">
+                    <button id="btn-tasks" onclick="selectAnalysis('tasks')"
+                        class="analysis-btn glass p-4 rounded-2xl border border-transparent transition-all text-center group">
                         <i class="fas fa-tasks text-2xl md:text-xl text-emerald-400 mb-2 block group-hover:scale-110 transition-transform"></i>
                         <div class="text-xs font-bold">タスク抽出</div>
                     </button>
-                    <button onclick="sendToNotion()" class="glass p-4 md:p-4 rounded-2xl hover:bg-white/10 active:bg-white/10 border border-transparent hover:border-white/40 transition-all text-center group">
+                    <button onclick="sendToNotion()"
+                        class="glass p-4 rounded-2xl hover:bg-white/10 active:bg-white/10 border border-transparent hover:border-white/40 transition-all text-center group">
                         <i class="fas fa-external-link-alt text-2xl md:text-xl text-slate-400 mb-2 block group-hover:scale-110 transition-transform"></i>
                         <div class="text-xs font-bold">Notionへ送信</div>
                     </button>
                 </div>
+
+                <!-- Prompt editor panel -->
+                <div id="prompt-panel" class="hidden glass rounded-3xl p-5 md:p-6 space-y-3 border border-indigo-500/20">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <i id="prompt-icon" class="fas fa-file-contract text-indigo-400 text-sm"></i>
+                            <span id="prompt-label" class="text-xs font-bold text-slate-300">プロンプト</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="resetPrompt()" class="text-[10px] text-slate-500 hover:text-slate-300 transition-colors">
+                                <i class="fas fa-rotate-left mr-1"></i>リセット
+                            </button>
+                            <button onclick="closePromptPanel()" class="text-[10px] text-slate-600 hover:text-slate-400 transition-colors ml-2">
+                                <i class="fas fa-xmark"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <textarea id="prompt-editor"
+                        class="w-full h-36 md:h-32 bg-slate-900/50 border border-slate-700 rounded-2xl p-4 text-xs text-slate-300 focus:outline-none focus:border-indigo-500/60 resize-none custom-scrollbar leading-relaxed font-mono"
+                        placeholder="プロンプトを入力..."></textarea>
+                    <div class="flex justify-end">
+                        <button onclick="runAnalysis()"
+                            class="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-bold rounded-full transition-all shadow-lg shadow-indigo-500/20">
+                            <i class="fas fa-play text-[10px]"></i> 実行する
+                        </button>
+                    </div>
+                </div>
+
                 <div class="arrow-down"></div>
             </section>
 
@@ -310,7 +356,7 @@
         </main>
 
         <footer class="mt-10 md:mt-20 mb-6 md:mb-10 text-center opacity-30 text-[10px] tracking-widest">
-            AUDIO INSIGHT CONSOLE v2.0.0 &copy; 2024
+            AUDIO INSIGHT CONSOLE v2.1.0 &copy; 2024
         </footer>
     </div>
 
@@ -390,7 +436,7 @@
     </div>
 
     <script>
-        const APP_VERSION = 'v2.0.0';
+        const APP_VERSION = 'v2.1.0';
 
         const state = {
             file: null,
@@ -922,48 +968,142 @@
         }
 
         // ── AI Analysis ───────────────────────────────────────────
-        async function runAnalysis(type) {
-            const sourceText = el.finalSource.value.trim();
-            if (!sourceText) {
-                showToast('解析対象のテキストがありません', 'red');
+        const DEFAULT_PROMPTS = {
+            minutes: `以下の書き起こしテキストをもとに、日本語で議事録を作成してください。
+
+【出力フォーマット】
+## 議事録
+
+**日時:** （テキストから読み取れる場合のみ）
+**参加者:** （話者ラベルから推定）
+
+### 議題・背景
+
+### 主な発言・議論
+
+### 決定事項
+
+### 次のアクション・宿題
+
+---
+書き起こしテキスト:
+{{SOURCE}}`,
+
+            summary: `以下の書き起こしテキストを読んで、日本語で要約してください。
+
+- 全体を3〜5行で要約
+- 重要なポイントを箇条書きで列挙
+- キーワードをボールドで強調
+
+---
+書き起こしテキスト:
+{{SOURCE}}`,
+
+            tasks: `以下の書き起こしテキストから、タスク・宿題・TODO項目を抽出してください。
+
+【出力フォーマット】
+- [ ] タスク名（担当者がわかれば記載）
+- [ ] ...
+
+期限や優先度が読み取れる場合は付記してください。
+
+---
+書き起こしテキスト:
+{{SOURCE}}`
+        };
+
+        const ANALYSIS_META = {
+            minutes: { label: '議事録作成', icon: 'fa-file-contract', color: 'text-indigo-400' },
+            summary: { label: '要約・ポイント', icon: 'fa-compress-alt', color: 'text-purple-400' },
+            tasks:   { label: 'タスク抽出', icon: 'fa-tasks', color: 'text-emerald-400' }
+        };
+
+        function selectAnalysis(type) {
+            // Toggle: clicking active type closes panel
+            if (state.lastAnalysisType === type && !document.getElementById('prompt-panel').classList.contains('hidden')) {
+                closePromptPanel();
                 return;
             }
-
             state.lastAnalysisType = type;
 
-            const labelMap = {
-                minutes: ['ANALYZING TEXT...', 'STRUCTURING MINUTES...', 'FINALIZING...'],
-                summary: ['ANALYZING TEXT...', 'EXTRACTING KEY POINTS...', 'FINALIZING...'],
-                tasks:   ['ANALYZING TEXT...', 'EXTRACTING TASKS...', 'FINALIZING...']
-            };
-            const labels = labelMap[type];
+            // Update button highlight
+            document.querySelectorAll('.analysis-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById(`btn-${type}`).classList.add('active');
+
+            // Update panel header
+            const meta = ANALYSIS_META[type];
+            document.getElementById('prompt-icon').className = `fas ${meta.icon} ${meta.color} text-sm`;
+            document.getElementById('prompt-label').textContent = meta.label;
+
+            // Fill prompt (keep edits if same type, reset if switching)
+            const editor = document.getElementById('prompt-editor');
+            editor.value = DEFAULT_PROMPTS[type];
+
+            document.getElementById('prompt-panel').classList.remove('hidden');
+            editor.focus();
+        }
+
+        function closePromptPanel() {
+            document.getElementById('prompt-panel').classList.add('hidden');
+            document.querySelectorAll('.analysis-btn').forEach(b => b.classList.remove('active'));
+            state.lastAnalysisType = null;
+        }
+
+        function resetPrompt() {
+            if (state.lastAnalysisType) {
+                document.getElementById('prompt-editor').value = DEFAULT_PROMPTS[state.lastAnalysisType];
+            }
+        }
+
+        async function runAnalysis() {
+            const sourceText = el.finalSource.value.trim();
+            if (!sourceText) { showToast('Transcription Source にテキストがありません', 'red'); return; }
+            if (!state.apiKey) { showToast('Settings から Gemini API キーを設定してください', 'red'); return; }
+
+            const rawPrompt = document.getElementById('prompt-editor').value.trim();
+            const prompt = rawPrompt.replace('{{SOURCE}}', sourceText);
+
+            const meta = ANALYSIS_META[state.lastAnalysisType] ?? { label: '解析' };
 
             startProgress([
-                { pct: 0,  label: labels[0], delay: 0 },
-                { pct: 30, label: labels[0], delay: 300 },
-                { pct: 55, label: labels[1], delay: 500 },
-                { pct: 80, label: labels[2], delay: 500 },
-                { pct: 90, label: labels[2], delay: 300 }
+                { pct: 0,  label: 'SENDING TO GEMINI...', delay: 0 },
+                { pct: 20, label: 'SENDING TO GEMINI...', delay: 300 },
+                { pct: 50, label: `RUNNING ${meta.label.toUpperCase()}...`, delay: 500 },
+                { pct: 80, label: 'FINALIZING...', delay: 600 },
+                { pct: 90, label: 'FINALIZING...', delay: 300 }
             ]);
 
             try {
-                await new Promise(r => setTimeout(r, 1800));
+                const res = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/${state.activeModel}:generateContent?key=${state.apiKey}`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: [{ text: prompt }] }]
+                        })
+                    }
+                );
+                const data = await res.json();
+                if (!res.ok) throw new Error(data?.error?.message ?? `HTTP ${res.status}`);
 
-                const results = {
-                    minutes: "### 議事録\n\n**【議題】**\nプロジェクト進捗およびUIフィードバックの反映\n\n**【決定事項】**\n- 音声入力の結果をTranscription Sourceへ自動流し込みに変更。\n- 確定ボタンを廃止し、マイク停止と同時に自動確定するフローを採用。\n\n**【今後の流れ】**\n1. 音声入力 / ファイルアップロード\n2. AI解析の実行\n3. Notionへ送信",
-                    summary: "1. **フロー改善**: マイクを止めると即座にTranscription Sourceへテキストが流れるUXを実現。\n2. **波形表示**: 録音中はリアルタイム波形アニメーションと文字起こしプレビューを表示。\n3. **自動確定**: 「確定ボタン」不要で操作ステップを削減。",
-                    tasks:   "- [ ] Gemini APIとの実連携（進行中）\n- [ ] 音声ファイルの実書き起こし実装\n- [ ] Notion送信ロジックの構築\n- [ ] モバイル表示の最終確認"
-                };
+                const output = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+                if (!output) throw new Error('レスポンスが空です');
 
                 finishProgress();
-                el.resultArea.innerHTML = `<div>${results[type].replace(/\n/g, '<br>')}</div>`;
+                // Render with basic markdown-like formatting
+                el.resultArea.innerHTML = `<div class="whitespace-pre-wrap">${escapeHtml(output)}</div>`;
                 el.resultArea.scrollTop = 0;
-                showToast('解析結果が生成されました', 'green');
+                showToast('解析完了', 'green');
 
             } catch (err) {
                 finishProgress();
-                showToast('解析中にエラーが発生しました', 'red');
+                showToast(`解析エラー: ${err.message}`, 'red');
             }
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         }
 
         // ── Notion test ───────────────────────────────────────────
