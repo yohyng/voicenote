@@ -29,10 +29,17 @@
 
         .arrow-down { width: 2px; height: 20px; background: linear-gradient(to bottom, #6366f1, transparent); margin: 0 auto; }
 
-        /* 確定テキストエリアのアニメーション */
         .source-focus {
             border-color: rgba(99, 102, 241, 0.5);
             box-shadow: 0 0 20px rgba(99, 102, 241, 0.1);
+        }
+
+        /* Progress bar */
+        #progress-bar-track {
+            transition: opacity 0.3s;
+        }
+        #progress-bar-fill {
+            transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
         }
     </style>
 </head>
@@ -46,10 +53,13 @@
                 </h1>
                 <p class="text-slate-400 text-sm mt-1">音声を構造化データへ変換するワークフロー</p>
             </div>
-            <button onclick="toggleSettings()" class="glass px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
-                <i class="fas fa-sliders text-indigo-400"></i>
-                <span class="text-sm font-semibold">Settings</span>
-            </button>
+            <div class="flex items-center gap-3">
+                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-3 py-1">v1.3.0</span>
+                <button onclick="toggleSettings()" class="glass px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
+                    <i class="fas fa-sliders text-indigo-400"></i>
+                    <span class="text-sm font-semibold">Settings</span>
+                </button>
+            </div>
         </header>
 
         <main class="space-y-8">
@@ -95,7 +105,6 @@
                         <i class="fas fa-file-import mr-2"></i>書き起こしを実行して確定
                     </button>
 
-                    <!-- 追加：書き起こし結果エリア (ワイド & スクロール可能) -->
                     <div class="w-full space-y-2">
                         <div class="flex items-center justify-between px-2">
                             <span class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Transcription Source (確定済み)</span>
@@ -150,9 +159,13 @@
                     </button>
                 </div>
                 <div class="glass rounded-3xl min-h-[300px] relative overflow-hidden flex flex-col">
-                    <div id="loading-overlay" class="hidden absolute inset-0 bg-slate-950/60 backdrop-blur-sm z-10 flex flex-col items-center justify-center">
-                        <div class="w-10 h-10 border-2 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin mb-4"></div>
-                        <p class="text-xs font-bold text-indigo-400 tracking-widest animate-pulse">GENERATING OUTPUT...</p>
+                    <!-- Progress overlay -->
+                    <div id="loading-overlay" class="hidden absolute inset-0 bg-slate-950/70 backdrop-blur-sm z-10 flex flex-col items-center justify-center gap-5 px-12">
+                        <p id="progress-label" class="text-xs font-bold text-indigo-400 tracking-widest">INITIALIZING...</p>
+                        <div id="progress-bar-track" class="w-full bg-slate-800 rounded-full h-1.5">
+                            <div id="progress-bar-fill" class="bg-indigo-500 h-1.5 rounded-full" style="width: 0%"></div>
+                        </div>
+                        <p id="progress-pct" class="text-[10px] text-slate-500 font-mono">0%</p>
                     </div>
 
                     <div id="result-content" class="p-8 text-sm text-slate-300 leading-relaxed custom-scrollbar overflow-y-auto max-h-[600px]">
@@ -166,7 +179,7 @@
         </main>
 
         <footer class="mt-20 mb-10 text-center opacity-30 text-[10px] tracking-widest">
-            AUDIO INSIGHT CONSOLE v1.2 &copy; 2024
+            AUDIO INSIGHT CONSOLE v1.3.0 &copy; 2024
         </footer>
     </div>
 
@@ -181,6 +194,20 @@
                     <label class="block text-[10px] font-bold text-slate-500 mb-2 tracking-widest">GEMINI API KEY</label>
                     <input type="password" id="api-key-input" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm focus:outline-none focus:border-indigo-500" placeholder="AIzaSy...">
                 </div>
+
+                <!-- API Test -->
+                <div class="rounded-2xl bg-slate-900/60 border border-slate-700/60 p-4 space-y-3">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[10px] font-bold text-slate-500 tracking-widest">API CONNECTION TEST</span>
+                        <button onclick="testApiConnection()" id="test-btn" class="text-[11px] font-bold px-3 py-1.5 bg-slate-800 hover:bg-indigo-600 border border-slate-700 hover:border-indigo-500 rounded-lg transition-all flex items-center gap-1.5">
+                            <i class="fas fa-plug text-[10px]"></i> Run Test
+                        </button>
+                    </div>
+                    <div id="test-result" class="text-[11px] text-slate-500 leading-relaxed min-h-[1.5rem]">
+                        — テストを実行してください
+                    </div>
+                </div>
+
                 <button onclick="saveApiKey()" class="w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-bold transition-all mt-4 shadow-lg shadow-indigo-500/30">Save Configuration</button>
                 <button onclick="toggleSettings()" class="w-full py-2 text-slate-500 text-sm font-medium">Cancel</button>
             </div>
@@ -194,6 +221,8 @@
     </div>
 
     <script>
+        const APP_VERSION = 'v1.3.0';
+
         const state = {
             file: null,
             apiKey: localStorage.getItem('GEMINI_API_KEY') || '',
@@ -210,6 +239,9 @@
             charCount: document.getElementById('char-count'),
             resultArea: document.getElementById('result-content'),
             loading: document.getElementById('loading-overlay'),
+            progressFill: document.getElementById('progress-bar-fill'),
+            progressLabel: document.getElementById('progress-label'),
+            progressPct: document.getElementById('progress-pct'),
             micBtn: document.getElementById('mic-btn'),
             micIcon: document.getElementById('mic-icon'),
             indicator: document.getElementById('recording-indicator')
@@ -218,13 +250,17 @@
         function showToast(msg, type = "indigo") {
             const toast = document.getElementById('toast');
             document.getElementById('toast-message').textContent = msg;
-            toast.style.borderColor = type === 'red' ? '#ef4444' : '#6366f1';
+            toast.style.borderColor = type === 'red' ? '#ef4444' : type === 'green' ? '#10b981' : '#6366f1';
             toast.classList.remove('translate-y-32', 'opacity-0');
             setTimeout(() => toast.classList.add('translate-y-32', 'opacity-0'), 3000);
         }
 
         function toggleSettings() {
-            document.getElementById('settings-modal').classList.toggle('hidden');
+            const modal = document.getElementById('settings-modal');
+            modal.classList.toggle('hidden');
+            if (!modal.classList.contains('hidden')) {
+                document.getElementById('api-key-input').value = state.apiKey;
+            }
         }
 
         function saveApiKey() {
@@ -232,6 +268,83 @@
             localStorage.setItem('GEMINI_API_KEY', state.apiKey);
             toggleSettings();
             showToast("Settings Saved");
+        }
+
+        // API Connection Test
+        async function testApiConnection() {
+            const keyInput = document.getElementById('api-key-input').value.trim() || state.apiKey;
+            const resultEl = document.getElementById('test-result');
+            const btn = document.getElementById('test-btn');
+
+            if (!keyInput) {
+                resultEl.innerHTML = '<span class="text-amber-400"><i class="fas fa-exclamation-triangle mr-1"></i>APIキーを入力してください</span>';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin text-[10px]"></i> Testing...';
+            resultEl.innerHTML = '<span class="text-slate-400">接続を確認中...</span>';
+
+            try {
+                const res = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${keyInput}`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: [{ text: 'Reply with only the word: OK' }] }],
+                            generationConfig: { maxOutputTokens: 5 }
+                        })
+                    }
+                );
+
+                if (res.ok) {
+                    const data = await res.json();
+                    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '(応答あり)';
+                    resultEl.innerHTML = `<span class="text-emerald-400"><i class="fas fa-check-circle mr-1"></i>接続成功 — モデル応答: "${reply}"</span>`;
+                } else {
+                    const err = await res.json();
+                    const msg = err?.error?.message || `HTTP ${res.status}`;
+                    resultEl.innerHTML = `<span class="text-red-400"><i class="fas fa-times-circle mr-1"></i>失敗: ${msg}</span>`;
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400"><i class="fas fa-times-circle mr-1"></i>ネットワークエラー: ${e.message}</span>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-plug text-[10px]"></i> Run Test';
+            }
+        }
+
+        // Progress bar helpers
+        let progressTimer = null;
+
+        function startProgress(steps) {
+            elements.loading.classList.remove('hidden');
+            let idx = 0;
+            setProgress(steps[idx].pct, steps[idx].label);
+
+            function advance() {
+                idx++;
+                if (idx >= steps.length) return;
+                const delay = steps[idx].delay ?? 600;
+                progressTimer = setTimeout(() => {
+                    setProgress(steps[idx].pct, steps[idx].label);
+                    advance();
+                }, delay);
+            }
+            advance();
+        }
+
+        function setProgress(pct, label) {
+            elements.progressFill.style.width = `${pct}%`;
+            elements.progressPct.textContent = `${pct}%`;
+            if (label) elements.progressLabel.textContent = label;
+        }
+
+        function finishProgress() {
+            clearTimeout(progressTimer);
+            setProgress(100, 'COMPLETE');
+            setTimeout(() => elements.loading.classList.add('hidden'), 400);
         }
 
         // Web Speech API
@@ -296,7 +409,7 @@
             elements.fileInfo.classList.add('hidden');
         }
 
-        // Step 1: Transcription - 確定テキストエリアへ流し込む
+        // Step 1: Transcription
         async function handleTranscription() {
             const inputVal = elements.transcriptArea.value.trim();
             if (!state.file && !inputVal) {
@@ -306,7 +419,6 @@
 
             showToast("書き起こしを確定しました");
 
-            // 確定エリアにテキストを移動/追加
             const currentText = elements.finalSource.value;
             const divider = currentText ? "\n---\n" : "";
             const newText = inputVal || (state.file ? `[音声ファイル ${state.file.name} を解析中...]` : "");
@@ -314,16 +426,14 @@
             elements.finalSource.value = currentText + divider + newText;
             elements.charCount.textContent = `${elements.finalSource.value.length} characters`;
 
-            // 入力欄をクリア
             elements.transcriptArea.value = "";
             elements.finalSource.scrollTop = elements.finalSource.scrollHeight;
 
-            // 視覚的フィードバック
             elements.finalSource.parentElement.classList.add('source-focus');
             setTimeout(() => elements.finalSource.parentElement.classList.remove('source-focus'), 1000);
         }
 
-        // Step 2 & 3: AI Analysis Flow - 確定エリアのテキストを元にする
+        // Step 2 & 3: AI Analysis
         async function runAnalysis(type) {
             const sourceText = elements.finalSource.value.trim();
             if (!sourceText) {
@@ -331,11 +441,23 @@
                 return;
             }
 
-            elements.loading.classList.remove('hidden');
+            const labelMap = {
+                minutes: ['ANALYZING TEXT...', 'STRUCTURING MINUTES...', 'FINALIZING...'],
+                summary: ['ANALYZING TEXT...', 'EXTRACTING KEY POINTS...', 'FINALIZING...'],
+                tasks: ['ANALYZING TEXT...', 'EXTRACTING TASKS...', 'FINALIZING...']
+            };
+            const labels = labelMap[type];
+
+            startProgress([
+                { pct: 0,  label: labels[0], delay: 0 },
+                { pct: 30, label: labels[0], delay: 300 },
+                { pct: 55, label: labels[1], delay: 500 },
+                { pct: 80, label: labels[2], delay: 500 },
+                { pct: 90, label: labels[2], delay: 300 }
+            ]);
 
             try {
-                // Mock API call
-                await new Promise(r => setTimeout(r, 1500));
+                await new Promise(r => setTimeout(r, 1800));
 
                 let result = "";
                 if (type === 'minutes') {
@@ -346,14 +468,14 @@
                     result = "- [ ] UIの最終微調整（完了）\n- [ ] スクロール挙動のテスト（完了）\n- [ ] Notion送信ロジックの構築（進行中）";
                 }
 
+                finishProgress();
                 elements.resultArea.innerHTML = `<div class="animate-in fade-in duration-700">${result.replace(/\n/g, '<br>')}</div>`;
                 elements.resultArea.scrollTop = 0;
-                showToast("解析結果が生成されました");
+                showToast("解析結果が生成されました", "green");
 
             } catch (err) {
+                finishProgress();
                 showToast("解析中にエラーが発生しました", "red");
-            } finally {
-                elements.loading.classList.add('hidden');
             }
         }
 
@@ -371,7 +493,6 @@
             navigator.clipboard.writeText(text).then(() => showToast("Copied to clipboard!"));
         }
 
-        // 文字数カウントの更新
         elements.finalSource.oninput = () => {
             elements.charCount.textContent = `${elements.finalSource.value.length} characters`;
         };
