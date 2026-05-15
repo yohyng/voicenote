@@ -107,7 +107,7 @@
                 <p class="text-slate-400 text-sm mt-1">音声を構造化データへ変換するワークフロー</p>
             </div>
             <div class="flex items-center gap-3">
-                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-3 py-1">v1.4.0</span>
+                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-3 py-1">v1.4.1</span>
                 <button onclick="toggleSettings()" class="glass px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
                     <i class="fas fa-sliders text-indigo-400"></i>
                     <span class="text-sm font-semibold">Settings</span>
@@ -277,7 +277,7 @@
         </main>
 
         <footer class="mt-20 mb-10 text-center opacity-30 text-[10px] tracking-widest">
-            AUDIO INSIGHT CONSOLE v1.4.0 &copy; 2024
+            AUDIO INSIGHT CONSOLE v1.4.1 &copy; 2024
         </footer>
     </div>
 
@@ -322,11 +322,12 @@
     </div>
 
     <script>
-        const APP_VERSION = 'v1.4.0';
+        const APP_VERSION = 'v1.4.1';
 
         const state = {
             file: null,
             apiKey: localStorage.getItem('GEMINI_API_KEY') || '',
+            activeModel: 'gemini-2.0-flash',
             recognition: null,
             isRecording: false,
             interimText: ''
@@ -397,6 +398,33 @@
         }
 
         // ── API Test ──────────────────────────────────────────────
+        const CANDIDATE_MODELS = [
+            'gemini-2.0-flash',
+            'gemini-1.5-flash',
+            'gemini-1.5-flash-8b'
+        ];
+
+        async function callGemini(apiKey, model, prompt) {
+            const res = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: { maxOutputTokens: 64 }
+                    })
+                }
+            );
+            const data = await res.json();
+            return { ok: res.ok, status: res.status, data };
+        }
+
+        function isQuotaError(data) {
+            const msg = data?.error?.message ?? '';
+            return msg.includes('quota') || msg.includes('Quota') || msg.includes('RESOURCE_EXHAUSTED');
+        }
+
         async function testApiConnection() {
             const keyInput = document.getElementById('api-key-input').value.trim() || state.apiKey;
             const resultEl = document.getElementById('test-result');
@@ -409,34 +437,41 @@
 
             btn.disabled = true;
             btn.innerHTML = '<i class="fas fa-spinner fa-spin text-[10px]"></i> Testing...';
-            resultEl.innerHTML = '<span class="text-slate-400">接続を確認中...</span>';
 
-            try {
-                const res = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${keyInput}`,
-                    {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{ parts: [{ text: 'Reply with only the word: OK' }] }],
-                            generationConfig: { maxOutputTokens: 5 }
-                        })
+            let lastError = null;
+            for (const model of CANDIDATE_MODELS) {
+                resultEl.innerHTML = `<span class="text-slate-400">試行中: ${model}...</span>`;
+                try {
+                    const { ok, data } = await callGemini(keyInput, model, 'Reply with only the word: OK');
+                    if (ok) {
+                        const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '(応答あり)';
+                        state.activeModel = model;
+                        resultEl.innerHTML = `<span class="text-emerald-400"><i class="fas fa-check-circle mr-1"></i>接続成功 (${model})<br>応答: "${reply}"</span>`;
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="fas fa-plug text-[10px]"></i> Run Test';
+                        return;
                     }
-                );
-                if (res.ok) {
-                    const data = await res.json();
-                    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '(応答あり)';
-                    resultEl.innerHTML = `<span class="text-emerald-400"><i class="fas fa-check-circle mr-1"></i>接続成功 — モデル応答: "${reply}"</span>`;
-                } else {
-                    const err = await res.json();
-                    resultEl.innerHTML = `<span class="text-red-400"><i class="fas fa-times-circle mr-1"></i>失敗: ${err?.error?.message ?? `HTTP ${res.status}`}</span>`;
+                    if (isQuotaError(data)) {
+                        lastError = `<span class="text-amber-400"><i class="fas fa-exclamation-triangle mr-1"></i>${model}: クォータ超過 — 次のモデルを試しています...</span>`;
+                        resultEl.innerHTML = lastError;
+                        continue;
+                    }
+                    lastError = data?.error?.message ?? `HTTP ${status}`;
+                    break;
+                } catch (e) {
+                    lastError = `ネットワークエラー: ${e.message}`;
+                    break;
                 }
-            } catch (e) {
-                resultEl.innerHTML = `<span class="text-red-400"><i class="fas fa-times-circle mr-1"></i>ネットワークエラー: ${e.message}</span>`;
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = '<i class="fas fa-plug text-[10px]"></i> Run Test';
             }
+
+            // All models failed
+            const isQuota = typeof lastError === 'string' && lastError.includes('クォータ');
+            resultEl.innerHTML = isQuota
+                ? `<span class="text-red-400"><i class="fas fa-times-circle mr-1"></i>全モデルでクォータ超過。<br><span class="text-slate-400 text-[10px]">Google AI Studio でBillingを確認するか、しばらく待ってから再試行してください。</span></span>`
+                : `<span class="text-red-400"><i class="fas fa-times-circle mr-1"></i>失敗: ${lastError}</span>`;
+
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-plug text-[10px]"></i> Run Test';
         }
 
         // ── File Upload → auto-flow to source ────────────────────
