@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI音声解析・議事録生成コンソール</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+        body { font-family: 'Inter', 'Noto Sans JP', sans-serif; background-color: #0b0f1a; color: #f8fafc; }
+        .glass { background: rgba(22, 30, 46, 0.7); backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .action-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .step-badge { @apply px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-indigo-500/20 text-indigo-400 border border-indigo-500/30; }
+
+        .mic-active {
+            background-color: #ef4444 !important;
+            animation: pulse-red 1.5s infinite;
+        }
+        @keyframes pulse-red {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+
+        .arrow-down { width: 2px; height: 20px; background: linear-gradient(to bottom, #6366f1, transparent); margin: 0 auto; }
+
+        /* 確定テキストエリアのアニメーション */
+        .source-focus {
+            border-color: rgba(99, 102, 241, 0.5);
+            box-shadow: 0 0 20px rgba(99, 102, 241, 0.1);
+        }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-8 flex flex-col items-center">
+    <div class="max-w-5xl w-full">
+        <!-- Header -->
+        <header class="flex justify-between items-center mb-10">
+            <div>
+                <h1 class="text-3xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400">
+                    Audio Insight Console
+                </h1>
+                <p class="text-slate-400 text-sm mt-1">音声を構造化データへ変換するワークフロー</p>
+            </div>
+            <button onclick="toggleSettings()" class="glass px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
+                <i class="fas fa-sliders text-indigo-400"></i>
+                <span class="text-sm font-semibold">Settings</span>
+            </button>
+        </header>
+
+        <main class="space-y-8">
+
+            <!-- SECTION 1: INPUT -->
+            <section class="space-y-4">
+                <div class="flex items-center gap-3">
+                    <span class="step-badge">Step 1</span>
+                    <h2 class="text-lg font-bold">音声の読込と確定</h2>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- ファイルアップロード -->
+                    <div class="glass p-6 rounded-3xl action-card flex flex-col justify-center border-2 border-transparent hover:border-indigo-500/30">
+                        <div id="drop-area" class="border-2 border-dashed border-slate-700 rounded-2xl p-6 text-center hover:bg-indigo-500/5 transition-all cursor-pointer group">
+                            <input type="file" id="file-input" class="hidden" accept="audio/*">
+                            <i class="fas fa-cloud-upload-alt text-2xl text-slate-500 group-hover:text-indigo-400 mb-2"></i>
+                            <p class="text-xs text-slate-400">音声ファイルをアップロード</p>
+                        </div>
+                        <div id="file-info" class="hidden mt-4 p-3 bg-indigo-500/10 rounded-xl flex justify-between items-center">
+                            <span id="info-name" class="text-xs truncate text-indigo-200"></span>
+                            <button onclick="clearFile()" class="text-slate-500 hover:text-red-400"><i class="fas fa-times-circle"></i></button>
+                        </div>
+                    </div>
+
+                    <!-- リアルタイム音声入力 -->
+                    <div class="glass p-6 rounded-3xl action-card relative">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-xs font-bold text-slate-500">REALTIME MIC</span>
+                            <div id="recording-indicator" class="hidden flex items-center gap-1 text-[10px] text-rose-500 font-bold uppercase animate-pulse">
+                                <i class="fas fa-circle"></i> Recording
+                            </div>
+                        </div>
+                        <textarea id="voice-transcript" class="w-full h-24 bg-slate-900/40 border border-slate-700 rounded-2xl p-4 text-sm text-slate-300 focus:outline-none focus:border-rose-500/50 resize-none custom-scrollbar"
+                        placeholder="ここに直接テキストを入力するか、マイクを使用..."></textarea>
+                        <button id="mic-btn" onclick="toggleSpeechRecognition()" class="absolute bottom-8 right-8 w-10 h-10 rounded-full bg-slate-800 text-slate-300 flex items-center justify-center shadow-xl hover:bg-slate-700 transition-all">
+                            <i id="mic-icon" class="fas fa-microphone"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="flex flex-col items-center gap-4">
+                    <button id="start-transcribe" onclick="handleTranscription()" class="px-10 py-4 bg-indigo-600 text-white rounded-full font-bold text-sm hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-500/20 active:scale-95">
+                        <i class="fas fa-file-import mr-2"></i>書き起こしを実行して確定
+                    </button>
+
+                    <!-- 追加：書き起こし結果エリア (ワイド & スクロール可能) -->
+                    <div class="w-full space-y-2">
+                        <div class="flex items-center justify-between px-2">
+                            <span class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Transcription Source (確定済み)</span>
+                            <span id="char-count" class="text-[10px] text-slate-600">0 characters</span>
+                        </div>
+                        <div class="glass rounded-3xl p-1">
+                            <textarea id="final-source-text" class="w-full h-48 bg-slate-900/20 border-none rounded-2xl p-6 text-sm text-indigo-100/80 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 resize-none custom-scrollbar leading-relaxed"
+                            placeholder="書き起こしを実行すると、ここに解析対象のテキストが表示されます。必要に応じて直接編集も可能です。"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="arrow-down"></div>
+                </div>
+            </section>
+
+            <!-- SECTION 2: AI MENU -->
+            <section class="space-y-4">
+                <div class="flex items-center gap-3">
+                    <span class="step-badge">Step 2</span>
+                    <h2 class="text-lg font-bold">AI解析メニュー</h2>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <button onclick="runAnalysis('minutes')" class="glass p-4 rounded-2xl hover:bg-indigo-500/10 border border-transparent hover:border-indigo-500/40 transition-all text-center group">
+                        <i class="fas fa-file-contract text-xl text-indigo-400 mb-2 group-hover:scale-110 transition-transform"></i>
+                        <div class="text-xs font-bold">議事録作成</div>
+                    </button>
+                    <button onclick="runAnalysis('summary')" class="glass p-4 rounded-2xl hover:bg-purple-500/10 border border-transparent hover:border-purple-500/40 transition-all text-center group">
+                        <i class="fas fa-compress-alt text-xl text-purple-400 mb-2 group-hover:scale-110 transition-transform"></i>
+                        <div class="text-xs font-bold">要約・ポイント</div>
+                    </button>
+                    <button onclick="runAnalysis('tasks')" class="glass p-4 rounded-2xl hover:bg-emerald-500/10 border border-transparent hover:border-emerald-500/40 transition-all text-center group">
+                        <i class="fas fa-tasks text-xl text-emerald-400 mb-2 group-hover:scale-110 transition-transform"></i>
+                        <div class="text-xs font-bold">タスク抽出</div>
+                    </button>
+                    <button onclick="sendToNotion()" class="glass p-4 rounded-2xl hover:bg-white/10 border border-transparent hover:border-white/40 transition-all text-center group">
+                        <i class="fas fa-external-link-alt text-xl text-slate-400 mb-2 group-hover:scale-110 transition-transform"></i>
+                        <div class="text-xs font-bold">Notionへ送信</div>
+                    </button>
+                </div>
+                <div class="arrow-down"></div>
+            </section>
+
+            <!-- SECTION 3: RESULT -->
+            <section class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <span class="step-badge">Step 3</span>
+                        <h2 class="text-lg font-bold">解析結果</h2>
+                    </div>
+                    <button onclick="copyResult()" class="text-xs text-slate-500 hover:text-white transition-colors">
+                        <i class="fas fa-copy mr-1"></i> Copy Result
+                    </button>
+                </div>
+                <div class="glass rounded-3xl min-h-[300px] relative overflow-hidden flex flex-col">
+                    <div id="loading-overlay" class="hidden absolute inset-0 bg-slate-950/60 backdrop-blur-sm z-10 flex flex-col items-center justify-center">
+                        <div class="w-10 h-10 border-2 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin mb-4"></div>
+                        <p class="text-xs font-bold text-indigo-400 tracking-widest animate-pulse">GENERATING OUTPUT...</p>
+                    </div>
+
+                    <div id="result-content" class="p-8 text-sm text-slate-300 leading-relaxed custom-scrollbar overflow-y-auto max-h-[600px]">
+                        <div class="flex flex-col items-center justify-center h-48 opacity-20 text-center">
+                            <i class="fas fa-wand-magic text-4xl mb-4"></i>
+                            <p>メニューからアクションを選択してください</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="mt-20 mb-10 text-center opacity-30 text-[10px] tracking-widest">
+            AUDIO INSIGHT CONSOLE v1.2 &copy; 2024
+        </footer>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+        <div class="glass max-w-md w-full rounded-3xl p-8 shadow-2xl border border-indigo-500/20">
+            <h3 class="text-xl font-bold mb-6 flex items-center gap-2">
+                <i class="fas fa-key text-indigo-400"></i> Configuration
+            </h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-[10px] font-bold text-slate-500 mb-2 tracking-widest">GEMINI API KEY</label>
+                    <input type="password" id="api-key-input" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm focus:outline-none focus:border-indigo-500" placeholder="AIzaSy...">
+                </div>
+                <button onclick="saveApiKey()" class="w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-bold transition-all mt-4 shadow-lg shadow-indigo-500/30">Save Configuration</button>
+                <button onclick="toggleSettings()" class="w-full py-2 text-slate-500 text-sm font-medium">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-8 right-8 glass px-6 py-4 rounded-2xl border-l-4 border-indigo-500 transform translate-y-32 opacity-0 transition-all duration-300 z-[100] shadow-2xl flex items-center gap-3">
+        <i id="toast-icon" class="fas fa-check-circle text-indigo-500"></i>
+        <p id="toast-message" class="text-sm font-bold"></p>
+    </div>
+
+    <script>
+        const state = {
+            file: null,
+            apiKey: localStorage.getItem('GEMINI_API_KEY') || '',
+            recognition: null,
+            isRecording: false
+        };
+
+        const elements = {
+            fileInput: document.getElementById('file-input'),
+            fileInfo: document.getElementById('file-info'),
+            infoName: document.getElementById('info-name'),
+            transcriptArea: document.getElementById('voice-transcript'),
+            finalSource: document.getElementById('final-source-text'),
+            charCount: document.getElementById('char-count'),
+            resultArea: document.getElementById('result-content'),
+            loading: document.getElementById('loading-overlay'),
+            micBtn: document.getElementById('mic-btn'),
+            micIcon: document.getElementById('mic-icon'),
+            indicator: document.getElementById('recording-indicator')
+        };
+
+        function showToast(msg, type = "indigo") {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-message').textContent = msg;
+            toast.style.borderColor = type === 'red' ? '#ef4444' : '#6366f1';
+            toast.classList.remove('translate-y-32', 'opacity-0');
+            setTimeout(() => toast.classList.add('translate-y-32', 'opacity-0'), 3000);
+        }
+
+        function toggleSettings() {
+            document.getElementById('settings-modal').classList.toggle('hidden');
+        }
+
+        function saveApiKey() {
+            state.apiKey = document.getElementById('api-key-input').value.trim();
+            localStorage.setItem('GEMINI_API_KEY', state.apiKey);
+            toggleSettings();
+            showToast("Settings Saved");
+        }
+
+        // Web Speech API
+        function initSpeech() {
+            window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!window.SpeechRecognition) {
+                showToast("Speech Recognition not supported", "red");
+                return null;
+            }
+            const rec = new SpeechRecognition();
+            rec.lang = 'ja-JP';
+            rec.continuous = true;
+            rec.interimResults = true;
+            rec.onstart = () => {
+                state.isRecording = true;
+                elements.micBtn.classList.add('mic-active');
+                elements.micIcon.className = 'fas fa-stop';
+                elements.indicator.classList.remove('hidden');
+            };
+            rec.onend = () => {
+                state.isRecording = false;
+                elements.micBtn.classList.remove('mic-active');
+                elements.micIcon.className = 'fas fa-microphone';
+                elements.indicator.classList.add('hidden');
+            };
+            rec.onresult = (e) => {
+                let final = '';
+                for (let i = e.resultIndex; i < e.results.length; ++i) {
+                    if (e.results[i].isFinal) final += e.results[i][0].transcript;
+                }
+                if (final) {
+                    elements.transcriptArea.value += (elements.transcriptArea.value ? '\n' : '') + final;
+                    elements.transcriptArea.scrollTop = elements.transcriptArea.scrollHeight;
+                }
+            };
+            return rec;
+        }
+
+        function toggleSpeechRecognition() {
+            if (state.isRecording) {
+                state.recognition.stop();
+            } else {
+                if (!state.recognition) state.recognition = initSpeech();
+                state.recognition?.start();
+            }
+        }
+
+        // File Handling
+        elements.fileInput.onchange = (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                state.file = file;
+                elements.infoName.textContent = file.name;
+                elements.fileInfo.classList.remove('hidden');
+            }
+        };
+        document.getElementById('drop-area').onclick = () => elements.fileInput.click();
+
+        function clearFile() {
+            state.file = null;
+            elements.fileInput.value = '';
+            elements.fileInfo.classList.add('hidden');
+        }
+
+        // Step 1: Transcription - 確定テキストエリアへ流し込む
+        async function handleTranscription() {
+            const inputVal = elements.transcriptArea.value.trim();
+            if (!state.file && !inputVal) {
+                showToast("音声ファイルまたはテキストを入力してください", "red");
+                return;
+            }
+
+            showToast("書き起こしを確定しました");
+
+            // 確定エリアにテキストを移動/追加
+            const currentText = elements.finalSource.value;
+            const divider = currentText ? "\n---\n" : "";
+            const newText = inputVal || (state.file ? `[音声ファイル ${state.file.name} を解析中...]` : "");
+
+            elements.finalSource.value = currentText + divider + newText;
+            elements.charCount.textContent = `${elements.finalSource.value.length} characters`;
+
+            // 入力欄をクリア
+            elements.transcriptArea.value = "";
+            elements.finalSource.scrollTop = elements.finalSource.scrollHeight;
+
+            // 視覚的フィードバック
+            elements.finalSource.parentElement.classList.add('source-focus');
+            setTimeout(() => elements.finalSource.parentElement.classList.remove('source-focus'), 1000);
+        }
+
+        // Step 2 & 3: AI Analysis Flow - 確定エリアのテキストを元にする
+        async function runAnalysis(type) {
+            const sourceText = elements.finalSource.value.trim();
+            if (!sourceText) {
+                showToast("解析対象の確定済みテキストがありません", "red");
+                return;
+            }
+
+            elements.loading.classList.remove('hidden');
+
+            try {
+                // Mock API call
+                await new Promise(r => setTimeout(r, 1500));
+
+                let result = "";
+                if (type === 'minutes') {
+                    result = "### 議事録: 確定済みソースに基づく解析\n\n**【議題】**\nプロジェクト進捗およびUIフィードバックの反映\n\n**【決定事項】**\n- 書き起こし結果エリアをワイドに配置し、スクロール可能にした。\n- 編集可能な確定テキストをAI解析のソースとして使用するフローを確立。\n\n**【今後の流れ】**\n1. 音声入力\n2. 確定エリアへの流し込み\n3. AI解析の実行";
+                } else if (type === 'summary') {
+                    result = "1. **新機能追加**: ワイドな「確定テキストエリア」を実装し、解析前の内容確認を容易にしました。\n2. **操作性の改善**: 入力・確定・解析の3ステップが直感的な上下の視線移動で完結します。\n3. **柔軟性**: AIに渡す前にユーザーが手動でテキストを修正できる構成になっています。";
+                } else {
+                    result = "- [ ] UIの最終微調整（完了）\n- [ ] スクロール挙動のテスト（完了）\n- [ ] Notion送信ロジックの構築（進行中）";
+                }
+
+                elements.resultArea.innerHTML = `<div class="animate-in fade-in duration-700">${result.replace(/\n/g, '<br>')}</div>`;
+                elements.resultArea.scrollTop = 0;
+                showToast("解析結果が生成されました");
+
+            } catch (err) {
+                showToast("解析中にエラーが発生しました", "red");
+            } finally {
+                elements.loading.classList.add('hidden');
+            }
+        }
+
+        function sendToNotion() {
+            if (elements.resultArea.innerText.includes("アクションを選択")) {
+                showToast("送信する解析結果がありません", "red");
+                return;
+            }
+            showToast("Notionへ解析データを送信しました");
+        }
+
+        function copyResult() {
+            const text = elements.resultArea.innerText;
+            if (!text || text.includes("アクションを選択")) return;
+            navigator.clipboard.writeText(text).then(() => showToast("Copied to clipboard!"));
+        }
+
+        // 文字数カウントの更新
+        elements.finalSource.oninput = () => {
+            elements.charCount.textContent = `${elements.finalSource.value.length} characters`;
+        };
+    </script>
+</body>
+</html>
