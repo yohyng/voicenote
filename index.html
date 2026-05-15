@@ -207,6 +207,9 @@
                     <div class="flex items-center justify-between px-2">
                         <span class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Transcription Source</span>
                         <div class="flex items-center gap-3">
+                            <button onclick="copySource()" class="text-[10px] text-slate-600 hover:text-indigo-400 transition-colors">
+                                <i class="fas fa-copy mr-1"></i>全コピー
+                            </button>
                             <span id="char-count" class="text-[10px] text-slate-600">0 characters</span>
                             <button onclick="clearSource()" class="text-[10px] text-slate-600 hover:text-red-400 transition-colors">
                                 <i class="fas fa-trash-alt mr-1"></i>Clear
@@ -375,6 +378,12 @@
             el.finalSource.scrollTop = el.finalSource.scrollHeight;
             el.sourceWrap.classList.add('source-focus');
             setTimeout(() => el.sourceWrap.classList.remove('source-focus'), 1200);
+        }
+
+        function copySource() {
+            const text = el.finalSource.value;
+            if (!text) return;
+            navigator.clipboard.writeText(text).then(() => showToast('Transcription をコピーしました'));
         }
 
         function clearSource() {
