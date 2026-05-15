@@ -91,7 +91,7 @@
                 <p class="text-slate-400 text-xs md:text-sm mt-1">音声を構造化データへ変換するワークフロー</p>
             </div>
             <div class="flex items-center gap-2 md:gap-3">
-                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v1.9.0</span>
+                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.0.0</span>
                 <button onclick="toggleSettings()" class="glass px-3 md:px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
                     <i class="fas fa-sliders text-indigo-400"></i>
                     <span class="hidden md:inline text-sm font-semibold">Settings</span>
@@ -310,7 +310,7 @@
         </main>
 
         <footer class="mt-10 md:mt-20 mb-6 md:mb-10 text-center opacity-30 text-[10px] tracking-widest">
-            AUDIO INSIGHT CONSOLE v1.9.0 &copy; 2024
+            AUDIO INSIGHT CONSOLE v2.0.0 &copy; 2024
         </footer>
     </div>
 
@@ -342,7 +342,42 @@
                     </div>
                 </div>
 
-                <button onclick="saveApiKey()" class="w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/30">Save Configuration</button>
+                <!-- Divider -->
+                <div class="border-t border-slate-700/60 pt-4">
+                    <p class="text-[10px] font-bold text-slate-500 tracking-widest mb-3 flex items-center gap-2">
+                        <i class="fas fa-n text-slate-400"></i> NOTION INTEGRATION
+                    </p>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-500 mb-2 tracking-widest">INTEGRATION TOKEN</label>
+                            <input type="password" id="notion-token-input"
+                                class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm focus:outline-none focus:border-indigo-500"
+                                placeholder="secret_...">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-500 mb-2 tracking-widest">DATABASE ID</label>
+                            <input type="text" id="notion-db-input"
+                                class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm focus:outline-none focus:border-indigo-500 font-mono"
+                                placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+                            <p class="text-[10px] text-slate-600 mt-1">NotionのデータベースURLの末尾32文字</p>
+                        </div>
+                        <!-- Notion connection test -->
+                        <div class="rounded-2xl bg-slate-900/60 border border-slate-700/60 p-3 space-y-2">
+                            <div class="flex items-center justify-between">
+                                <span class="text-[10px] font-bold text-slate-500 tracking-widest">CONNECTION TEST</span>
+                                <button onclick="testNotionConnection()" id="notion-test-btn"
+                                    class="text-[11px] font-bold px-3 py-1.5 bg-slate-800 hover:bg-indigo-600 border border-slate-700 hover:border-indigo-500 rounded-lg transition-all flex items-center gap-1.5">
+                                    <i class="fas fa-plug text-[10px]"></i> Run Test
+                                </button>
+                            </div>
+                            <div id="notion-test-result" class="text-[11px] text-slate-500 leading-relaxed min-h-[1.5rem]">
+                                — テストを実行してください
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <button onclick="saveAllSettings()" class="w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/30">Save Configuration</button>
                 <button onclick="toggleSettings()" class="w-full py-2 text-slate-500 text-sm font-medium">Cancel</button>
             </div>
         </div>
@@ -355,15 +390,18 @@
     </div>
 
     <script>
-        const APP_VERSION = 'v1.9.0';
+        const APP_VERSION = 'v2.0.0';
 
         const state = {
             file: null,
             apiKey: localStorage.getItem('GEMINI_API_KEY') || '',
             activeModel: 'gemini-2.5-flash',
+            notionToken: localStorage.getItem('NOTION_TOKEN') || '',
+            notionDbId: localStorage.getItem('NOTION_DB_ID') || '',
             recognition: null,
             isRecording: false,
-            interimText: ''
+            interimText: '',
+            lastAnalysisType: null
         };
 
         const el = {
@@ -426,12 +464,18 @@
             modal.classList.toggle('hidden');
             if (!modal.classList.contains('hidden')) {
                 document.getElementById('api-key-input').value = state.apiKey;
+                document.getElementById('notion-token-input').value = state.notionToken;
+                document.getElementById('notion-db-input').value = state.notionDbId;
             }
         }
 
-        function saveApiKey() {
+        function saveAllSettings() {
             state.apiKey = document.getElementById('api-key-input').value.trim();
             localStorage.setItem('GEMINI_API_KEY', state.apiKey);
+            state.notionToken = document.getElementById('notion-token-input').value.trim();
+            localStorage.setItem('NOTION_TOKEN', state.notionToken);
+            state.notionDbId = document.getElementById('notion-db-input').value.trim().replace(/-/g, '');
+            localStorage.setItem('NOTION_DB_ID', state.notionDbId);
             toggleSettings();
             showToast('Settings Saved');
         }
@@ -885,6 +929,8 @@
                 return;
             }
 
+            state.lastAnalysisType = type;
+
             const labelMap = {
                 minutes: ['ANALYZING TEXT...', 'STRUCTURING MINUTES...', 'FINALIZING...'],
                 summary: ['ANALYZING TEXT...', 'EXTRACTING KEY POINTS...', 'FINALIZING...'],
@@ -920,12 +966,85 @@
             }
         }
 
-        function sendToNotion() {
-            if (el.resultArea.innerText.includes('アクションを選択')) {
+        // ── Notion test ───────────────────────────────────────────
+        async function testNotionConnection() {
+            const token = document.getElementById('notion-token-input').value.trim();
+            const dbId  = document.getElementById('notion-db-input').value.trim().replace(/-/g, '');
+            const resultEl = document.getElementById('notion-test-result');
+            const btn = document.getElementById('notion-test-btn');
+
+            if (!token || !dbId) {
+                resultEl.innerHTML = '<span class="text-amber-400"><i class="fas fa-exclamation-triangle mr-1"></i>トークンとDatabase IDを入力してください</span>';
+                return;
+            }
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin text-[10px]"></i> Testing...';
+            resultEl.innerHTML = '<span class="text-slate-400">接続確認中...</span>';
+
+            try {
+                const res = await fetch('/api/notion', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'test', token, databaseId: dbId })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    const dbTitle = data?.title?.[0]?.plain_text || '(無題)';
+                    resultEl.innerHTML = `<span class="text-emerald-400"><i class="fas fa-check-circle mr-1"></i>接続成功 — データベース: "${dbTitle}"</span>`;
+                } else {
+                    const msg = data?.message ?? data?.error ?? `HTTP ${res.status}`;
+                    resultEl.innerHTML = `<span class="text-red-400"><i class="fas fa-times-circle mr-1"></i>失敗: ${msg}</span>`;
+                }
+            } catch (e) {
+                resultEl.innerHTML = `<span class="text-red-400"><i class="fas fa-times-circle mr-1"></i>${e.message}</span>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-plug text-[10px]"></i> Run Test';
+            }
+        }
+
+        // ── Send to Notion ────────────────────────────────────────
+        async function sendToNotion() {
+            const resultText = el.resultArea.innerText;
+            if (!resultText || resultText.includes('アクションを選択')) {
                 showToast('送信する解析結果がありません', 'red');
                 return;
             }
-            showToast('Notionへ解析データを送信しました');
+            if (!state.notionToken || !state.notionDbId) {
+                showToast('Settings から Notion の設定をしてください', 'red');
+                toggleSettings();
+                return;
+            }
+
+            const typeLabel = { minutes: '議事録', summary: '要約', tasks: 'タスク' };
+            const now = new Date();
+            const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+            const label = typeLabel[state.lastAnalysisType] ?? '解析結果';
+            const title = `${label} — ${dateStr}`;
+
+            showToast('Notionに送信中...', 'indigo');
+
+            try {
+                const res = await fetch('/api/notion', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        token: state.notionToken,
+                        databaseId: state.notionDbId,
+                        title,
+                        content: resultText
+                    })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast('Notionに送信しました', 'green');
+                } else {
+                    const msg = data?.message ?? data?.error ?? `HTTP ${res.status}`;
+                    showToast(`送信失敗: ${msg}`, 'red');
+                }
+            } catch (e) {
+                showToast(`送信失敗: ${e.message}`, 'red');
+            }
         }
 
         function copyResult() {
