@@ -736,26 +736,30 @@
                 statusMsg.textContent = 'Gemini APIに送信中...';
                 await tickTo(15, 25, 400);
 
-                // Step 3: AI analyzing  25→88% (slow crawl while waiting for response)
+                // Step 3: AI analyzing  25→95% (crawl speed scales with file size)
                 setProgStep('ai');
                 statusMsg.textContent = '解析中...';
                 cycleEl.textContent = CYCLING_MSGS[0];
                 cycleInterval = setInterval(() => {
                     cycleIdx = (cycleIdx + 1) % CYCLING_MSGS.length;
                     cycleEl.textContent = CYCLING_MSGS[cycleIdx];
-                }, 3000);
+                }, 2000);
 
-                // Crawl 25→88% over estimated time (slow, 1%/600ms → ~38秒)
-                // Run in parallel with actual API fetch — stops when fetch resolves
+                // Estimate processing time: ~1s per 100KB, min 8s, no cap
+                // Crawl 25→95 over that time so bar keeps moving until response
+                const estimatedMs = Math.max(8000, (state.file.size / 1024 / 100) * 1000);
+                const crawlSteps = 70; // 25→95
+                const crawlInterval = estimatedMs / crawlSteps;
+
                 let crawlResolve;
                 const crawlDone = new Promise(r => { crawlResolve = r; });
                 let crawlPct = 25;
                 const crawlTimer = setInterval(() => {
-                    if (crawlPct < 88) {
+                    if (crawlPct < 95) {
                         crawlPct++;
                         setTranscribePct(crawlPct);
                     }
-                }, 500);
+                }, crawlInterval);
                 crawlDone.then(() => clearInterval(crawlTimer));
 
                 const transcribePrompt = `この音声を文字起こししてください。以下のルールに従ってください。
@@ -804,7 +808,7 @@
                 // Stop crawl, jump to 90%
                 crawlResolve();
                 clearInterval(cycleInterval);
-                await tickTo(crawlPct, 90, 200);
+                await tickTo(crawlPct, 97, 200);
 
                 if (!transcript) throw new Error(lastErr ?? '書き起こし結果が空です');
 
