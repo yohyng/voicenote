@@ -1173,9 +1173,9 @@
 
         // ── Send to Notion ────────────────────────────────────────
         async function sendToNotion() {
-            const resultText = el.resultArea.innerText;
-            if (!resultText || resultText.includes('アクションを選択')) {
-                showToast('送信する解析結果がありません', 'red');
+            const sourceText = el.finalSource.value.trim();
+            if (!sourceText) {
+                showToast('Transcription Source にテキストがありません', 'red');
                 return;
             }
             if (!state.notionToken || !state.notionDbId) {
@@ -1184,17 +1184,11 @@
                 return;
             }
 
-            const typeLabel = { minutes: '議事録', summary: '要約', tasks: 'タスク' };
-            const label = typeLabel[state.lastAnalysisType] ?? '解析結果';
-
-            // 結果テキストの先頭行をタイトルに（マークダウン記号を除去・80字で切る）
-            const firstLine = resultText
-                .split('\n')
-                .map(l => l.replace(/^#+\s*/, '').replace(/\*\*/g, '').trim())
-                .find(l => l.length > 0) ?? '';
+            // 先頭行をタイトルに（80字で切る）
+            const firstLine = sourceText.split('\n').find(l => l.trim().length > 0) ?? '';
             const title = firstLine
                 ? `${firstLine.slice(0, 80)}${firstLine.length > 80 ? '…' : ''}`
-                : label;
+                : '書き起こし';
 
             showToast('Notionに送信中...', 'indigo');
 
@@ -1206,7 +1200,7 @@
                         token: state.notionToken,
                         databaseId: state.notionDbId,
                         title,
-                        content: resultText
+                        content: sourceText
                     })
                 });
                 const data = await res.json();
