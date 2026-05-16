@@ -854,6 +854,8 @@
 
         async function startWaveform() {
             waveAudio.bars = Array.from(el.waveform.querySelectorAll('.wave-bar'));
+            // SpeechRecognition がマイクを確保した後に取得するため少し待つ
+            await new Promise(r => setTimeout(r, 300));
             try {
                 waveAudio.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 waveAudio.ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -863,8 +865,21 @@
                 waveAudio.source.connect(waveAudio.analyser);
                 drawWave();
             } catch (e) {
-                // マイク権限なし時は無視（SpeechRecognitionがエラーを出す）
+                // 取得できなければCSSアニメーションにフォールバック（録音は継続）
+                startWaveFallback();
             }
+        }
+
+        function startWaveFallback() {
+            if (!waveAudio.bars) return;
+            let t = 0;
+            waveAudio.rafId = setInterval(() => {
+                t += 0.15;
+                waveAudio.bars.forEach((bar, i) => {
+                    const pct = 20 + Math.abs(Math.sin(t + i * 0.5)) * 70;
+                    bar.style.height = `${pct}%`;
+                });
+            }, 50);
         }
 
         function drawWave() {
@@ -882,6 +897,8 @@
 
         function stopWaveform() {
             cancelAnimationFrame(waveAudio.rafId);
+            clearInterval(waveAudio.rafId);
+            waveAudio.rafId = null;
             waveAudio.source?.disconnect();
             waveAudio.stream?.getTracks().forEach(t => t.stop());
             waveAudio.ctx?.close();
@@ -950,7 +967,13 @@
             };
 
             rec.onerror = (e) => {
-                showToast(`マイクエラー: ${e.error}`, 'red');
+                if (e.error === 'not-allowed') {
+                    showToast('マイクへのアクセスが拒否されました。ブラウザのアドレスバー横のアイコンから許可してください', 'red');
+                } else if (e.error === 'no-speech') {
+                    // 無音タイムアウトは自然終了として扱う
+                } else {
+                    showToast(`マイクエラー: ${e.error}`, 'red');
+                }
                 rec.onend();
             };
 
