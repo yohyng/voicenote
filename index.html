@@ -452,7 +452,7 @@
             notionDbId: localStorage.getItem('NOTION_DB_ID') || '',
             recognition: null,
             isRecording: false,
-            interimText: '',
+            micFinalBuffer: '',
             lastAnalysisType: null
         };
 
@@ -854,7 +854,9 @@
 
         async function startWaveform() {
             waveAudio.bars = Array.from(el.waveform.querySelectorAll('.wave-bar'));
-            // SpeechRecognition がマイクを確保した後に取得するため少し待つ
+            // モバイルではSpeechRecognitionとの競合を避けCSSアニメーションのみ使用
+            const isMobile = navigator.maxTouchPoints > 0;
+            if (isMobile) { startWaveFallback(); return; }
             await new Promise(r => setTimeout(r, 300));
             try {
                 waveAudio.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -865,7 +867,6 @@
                 waveAudio.source.connect(waveAudio.analyser);
                 drawWave();
             } catch (e) {
-                // 取得できなければCSSアニメーションにフォールバック（録音は継続）
                 startWaveFallback();
             }
         }
@@ -907,29 +908,37 @@
         }
 
         // ── Speech Recognition → auto-flow to source ─────────────
-        function initSpeech() {
-            window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!window.SpeechRecognition) {
-                showToast('Speech Recognition not supported', 'red');
-                return null;
-            }
-            const rec = new SpeechRecognition();
-            rec.lang = 'ja-JP';
-            rec.continuous = true;
-            rec.interimResults = true;
+        // Android Chrome は continuous モードが不安定なため、
+        // onend 後に自動再起動する方式で連続録音を実現する
+        const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-            let finalBuffer = '';
+        function createRec() {
+            if (!SpeechRec) return null;
+            const rec = new SpeechRec();
+            rec.lang = 'ja-JP';
+            rec.continuous = false;   // Android互換: falseにして自動再起動で代替
+            rec.interimResults = true;
+            rec.maxAlternatives = 1;
+            return rec;
+        }
+
+        function startRecording() {
+            if (!SpeechRec) {
+                showToast('このブラウザは音声入力に対応していません', 'red');
+                return;
+            }
+
+            // 毎回新しいインスタンスを作る（使い回しによるバグ回避）
+            state.recognition = createRec();
+            const rec = state.recognition;
 
             rec.onstart = () => {
-                state.isRecording = true;
-                finalBuffer = '';
-                state.interimText = '';
-                el.micBtn.className = 'mic-btn-active w-16 h-16 rounded-full flex items-center justify-center text-2xl text-white';
+                if (!state.isRecording) return; // 停止ボタン後の遅延起動を無視
+                el.micBtn.className = 'mic-btn-active w-20 h-20 md:w-16 md:h-16 rounded-full flex items-center justify-center text-3xl md:text-2xl text-white';
                 el.micIcon.className = 'fas fa-stop';
                 el.waveform.classList.remove('hidden');
                 el.waveform.style.display = 'flex';
                 el.recBadge.style.display = 'flex';
-                el.livePreview.textContent = '';
                 el.livePreview.classList.add('typing-cursor');
                 startWaveform();
             };
@@ -938,54 +947,77 @@
                 let interim = '';
                 for (let i = e.resultIndex; i < e.results.length; i++) {
                     if (e.results[i].isFinal) {
-                        finalBuffer += e.results[i][0].transcript;
+                        state.micFinalBuffer += e.results[i][0].transcript;
                     } else {
                         interim += e.results[i][0].transcript;
                     }
                 }
-                el.livePreview.textContent = finalBuffer + interim;
-                el.livePreview.scrollTop = el.livePreview.scrollHeight;
-            };
-
-            rec.onend = () => {
-                state.isRecording = false;
-                stopWaveform();
-                el.micBtn.className = 'mic-btn-idle w-16 h-16 rounded-full flex items-center justify-center text-2xl text-indigo-300';
-                el.micIcon.className = 'fas fa-microphone';
-                el.waveform.style.display = 'none';
-                el.recBadge.style.display = 'none';
-                el.livePreview.classList.remove('typing-cursor');
-
-                const text = finalBuffer.trim();
-                if (text) {
-                    appendToSource(text);
-                    el.livePreview.textContent = '入力を確定しました';
-                    setTimeout(() => { el.livePreview.textContent = 'マイクボタンを押して話しかけてください'; }, 2000);
-                } else {
-                    el.livePreview.textContent = 'マイクボタンを押して話しかけてください';
-                }
+                el.livePreview.textContent = state.micFinalBuffer + interim;
             };
 
             rec.onerror = (e) => {
                 if (e.error === 'not-allowed') {
-                    showToast('マイクへのアクセスが拒否されました。ブラウザのアドレスバー横のアイコンから許可してください', 'red');
-                } else if (e.error === 'no-speech') {
-                    // 無音タイムアウトは自然終了として扱う
+                    state.isRecording = false;
+                    showToast('マイクが許可されていません。アドレスバーのアイコンから許可してください', 'red');
+                    stopRecordingUI();
+                } else if (e.error === 'no-speech' || e.error === 'aborted') {
+                    // 無音・中断は自動再起動で対応（下のonendに任せる）
                 } else {
                     showToast(`マイクエラー: ${e.error}`, 'red');
                 }
-                rec.onend();
             };
 
-            return rec;
+            rec.onend = () => {
+                // まだ録音継続中なら自動再起動（Android continuous対応）
+                if (state.isRecording) {
+                    try { state.recognition = createRec(); attachHandlers(state.recognition); state.recognition.start(); } catch (_) {}
+                    return;
+                }
+                finishRecording();
+            };
+
+            rec.start();
+        }
+
+        function attachHandlers(rec) {
+            rec.onstart   = state.recognition.onstart;
+            rec.onresult  = state.recognition.onresult;
+            rec.onerror   = state.recognition.onerror;
+            rec.onend     = state.recognition.onend;
+        }
+
+        function stopRecordingUI() {
+            stopWaveform();
+            el.micBtn.className = 'mic-btn-idle w-20 h-20 md:w-16 md:h-16 rounded-full flex items-center justify-center text-3xl md:text-2xl text-indigo-300';
+            el.micIcon.className = 'fas fa-microphone';
+            el.waveform.style.display = 'none';
+            el.recBadge.style.display = 'none';
+            el.livePreview.classList.remove('typing-cursor');
+        }
+
+        function finishRecording() {
+            stopRecordingUI();
+            const text = state.micFinalBuffer.trim();
+            if (text) {
+                appendToSource(text);
+                el.livePreview.textContent = '入力を確定しました';
+                setTimeout(() => { el.livePreview.textContent = 'マイクボタンを押して話しかけてください'; }, 2000);
+            } else {
+                el.livePreview.textContent = 'マイクボタンを押して話しかけてください';
+            }
+            state.micFinalBuffer = '';
         }
 
         function toggleSpeechRecognition() {
             if (state.isRecording) {
-                state.recognition.stop();
+                state.isRecording = false;
+                try { state.recognition?.stop(); } catch (_) {}
+                finishRecording();
             } else {
-                if (!state.recognition) state.recognition = initSpeech();
-                state.recognition?.start();
+                state.isRecording = true;
+                state.micFinalBuffer = '';
+                el.livePreview.textContent = '聞いています...';
+                startRecording();
             }
         }
 
