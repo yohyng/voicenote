@@ -1185,10 +1185,16 @@
             }
 
             const typeLabel = { minutes: '議事録', summary: '要約', tasks: 'タスク' };
-            const now = new Date();
-            const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
             const label = typeLabel[state.lastAnalysisType] ?? '解析結果';
-            const title = `${label} — ${dateStr}`;
+
+            // 結果テキストの先頭行をタイトルに（マークダウン記号を除去・80字で切る）
+            const firstLine = resultText
+                .split('\n')
+                .map(l => l.replace(/^#+\s*/, '').replace(/\*\*/g, '').trim())
+                .find(l => l.length > 0) ?? '';
+            const title = firstLine
+                ? `${firstLine.slice(0, 80)}${firstLine.length > 80 ? '…' : ''}`
+                : label;
 
             showToast('Notionに送信中...', 'indigo');
 
