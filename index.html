@@ -109,7 +109,7 @@
                 <p class="text-slate-400 text-xs md:text-sm mt-1">音声を構造化データへ変換するワークフロー</p>
             </div>
             <div class="flex items-center gap-2 md:gap-3">
-                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.1.4</span>
+                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.2.0</span>
                 <button onclick="toggleSettings()" class="glass px-3 md:px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
                     <i class="fas fa-sliders text-indigo-400"></i>
                     <span class="hidden md:inline text-sm font-semibold">Settings</span>
@@ -369,7 +369,7 @@
         </main>
 
         <footer class="mt-10 md:mt-20 mb-6 md:mb-10 text-center opacity-30 text-[10px] tracking-widest">
-            AUDIO INSIGHT CONSOLE v2.1.4 &copy; 2024
+            AUDIO INSIGHT CONSOLE v2.2.0 &copy; 2024
         </footer>
     </div>
 
@@ -461,7 +461,7 @@
     </div>
 
     <script>
-        const APP_VERSION = 'v2.1.4';
+        const APP_VERSION = 'v2.2.0';
 
         const state = {
             file: null,
@@ -869,51 +869,19 @@
         // ── Realtime waveform via Web Audio API ───────────────────
         const waveAudio = {
             ctx: null, analyser: null, source: null,
-            stream: null, rafId: null,
-            bars: null
+            rafId: null, bars: null
         };
 
-        // Activity level for SR-driven waveform (0.0–1.0, decays over time)
-        let waveActivity = 0;
-
-        function boostWave(amount = 0.6) {
-            waveActivity = Math.min(1, waveActivity + amount);
-        }
-
-        async function startWaveform() {
+        function startWaveformFromStream(stream) {
             waveAudio.bars = Array.from(el.waveform.querySelectorAll('.wave-bar'));
             try {
-                const audioConstraint = state.selectedDeviceId
-                    ? { deviceId: { exact: state.selectedDeviceId } }
-                    : true;
-                waveAudio.stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint, video: false });
                 waveAudio.ctx = new (window.AudioContext || window.webkitAudioContext)();
                 waveAudio.analyser = waveAudio.ctx.createAnalyser();
                 waveAudio.analyser.fftSize = 64;
-                waveAudio.source = waveAudio.ctx.createMediaStreamSource(waveAudio.stream);
+                waveAudio.source = waveAudio.ctx.createMediaStreamSource(stream);
                 waveAudio.source.connect(waveAudio.analyser);
                 drawWave();
-                return true;
-            } catch (e) {
-                // getUserMedia failed (mic held by SR on Android) → SR-activity driven animation
-                startWaveSpeechMode();
-                return false;
-            }
-        }
-
-        // Waveform driven by SR speech events instead of raw audio data
-        function startWaveSpeechMode() {
-            if (!waveAudio.bars) return;
-            let t = 0;
-            waveAudio.rafId = setInterval(() => {
-                t += 0.12;
-                waveActivity *= 0.88; // decay
-                waveAudio.bars.forEach((bar, i) => {
-                    const idle = 8 + Math.abs(Math.sin(t + i * 0.7)) * 8;
-                    const active = waveActivity * 75 * Math.abs(Math.sin(t * 2 + i * 0.5));
-                    bar.style.height = `${idle + active}%`;
-                });
-            }, 50);
+            } catch (_) {}
         }
 
         function drawWave() {
@@ -923,18 +891,15 @@
             const step = Math.floor(data.length / bars.length);
             bars.forEach((bar, i) => {
                 const val = data[i * step] / 255;
-                const pct = Math.max(8, Math.round(val * 100));
-                bar.style.height = `${pct}%`;
+                bar.style.height = `${Math.max(8, Math.round(val * 100))}%`;
             });
             waveAudio.rafId = requestAnimationFrame(drawWave);
         }
 
         function stopWaveform() {
             cancelAnimationFrame(waveAudio.rafId);
-            clearInterval(waveAudio.rafId);
             waveAudio.rafId = null;
             waveAudio.source?.disconnect();
-            waveAudio.stream?.getTracks().forEach(t => t.stop());
             waveAudio.ctx?.close();
             waveAudio.ctx = null;
             if (waveAudio.bars) waveAudio.bars.forEach(b => b.style.height = '15%');
@@ -984,93 +949,113 @@
             document.getElementById('device-modal').classList.add('hidden');
         }
 
-        // ── Speech Recognition → auto-flow to source ─────────────
-        // Android Chrome は continuous モードが不安定なため、
-        // onend 後に自動再起動する方式で連続録音を実現する
-        const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+        // ── MediaRecorder + Gemini mic input ─────────────────────────
+        const micState = { mediaRecorder: null, stream: null };
+        let pendingChunk = Promise.resolve();
 
-        function createRec() {
-            if (!SpeechRec) return null;
-            const rec = new SpeechRec();
-            rec.lang = 'ja-JP';
-            rec.continuous = false;   // Android互換: falseにして自動再起動で代替
-            rec.interimResults = true;
-            rec.maxAlternatives = 1;
-            return rec;
-        }
-
-        function startRecording() {
-            if (!SpeechRec) {
+        async function startRecording() {
+            if (!navigator.mediaDevices?.getUserMedia) {
                 showToast('このブラウザは音声入力に対応していません', 'red');
                 return;
             }
+            if (!state.apiKey) {
+                showToast('設定からGemini APIキーを入力してください', 'red');
+                state.isRecording = false;
+                return;
+            }
 
-            // Show recording UI immediately
+            // Acquire mic stream
+            try {
+                const audioConstraint = state.selectedDeviceId
+                    ? { deviceId: { exact: state.selectedDeviceId } }
+                    : true;
+                micState.stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint, video: false });
+            } catch (e) {
+                showToast(e.name === 'NotAllowedError'
+                    ? 'マイクが許可されていません。アドレスバーのアイコンから許可してください'
+                    : `マイクエラー: ${e.message}`, 'red');
+                state.isRecording = false;
+                return;
+            }
+
+            // Show UI
             el.micBtn.className = 'mic-btn-active w-20 h-20 md:w-16 md:h-16 rounded-full flex items-center justify-center text-3xl md:text-2xl text-white';
             el.micIcon.className = 'fas fa-stop';
             el.waveform.classList.remove('hidden');
             el.waveform.style.display = 'flex';
             el.recBadge.style.display = 'flex';
             el.livePreview.classList.add('typing-cursor');
+            el.livePreview.textContent = '話しかけてください（5秒ごとに変換）';
 
-            waveActivity = 0;
+            // Real waveform from the same stream
+            startWaveformFromStream(micState.stream);
 
-            // SR-first: SpeechRecognition gets mic priority on Android.
-            // Waveform starts after SR's onstart fires; if getUserMedia fails because
-            // SR holds the mic exclusively, we fall back to SR-activity-driven animation.
-            function startSR() {
-                if (!state.isRecording) return;
-                const rec = createRec();
-                state.recognition = rec;
+            // Choose best supported audio format
+            const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus']
+                .find(t => MediaRecorder.isTypeSupported(t)) || '';
 
-                rec.onstart = () => {
-                    // Start waveform once SR has the mic; guard against re-init on restarts
-                    if (!waveAudio.rafId) startWaveform();
-                };
+            micState.mediaRecorder = new MediaRecorder(micState.stream, mimeType ? { mimeType } : {});
+            const effectiveMime = micState.mediaRecorder.mimeType;
 
-                rec.onspeechstart = () => boostWave(0.8);
+            micState.mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 1000) {
+                    pendingChunk = transcribeMicChunk(e.data, effectiveMime);
+                }
+            };
 
-                rec.onresult = (e) => {
-                    boostWave(0.5);
-                    let interim = '';
-                    for (let i = e.resultIndex; i < e.results.length; i++) {
-                        if (e.results[i].isFinal) {
-                            state.micFinalBuffer += e.results[i][0].transcript;
-                        } else {
-                            interim += e.results[i][0].transcript;
-                        }
+            micState.mediaRecorder.onstop = async () => {
+                await pendingChunk; // wait for last chunk to finish
+                stopWaveform();
+                micState.stream?.getTracks().forEach(t => t.stop());
+                micState.stream = null;
+                finishRecording();
+            };
+
+            micState.mediaRecorder.start(5000); // 5-second chunks
+        }
+
+        async function transcribeMicChunk(blob, mimeType) {
+            el.livePreview.textContent = (state.micFinalBuffer ? state.micFinalBuffer + ' ' : '') + '🔄 変換中...';
+
+            const base64 = await new Promise(resolve => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result.split(',')[1]);
+                reader.readAsDataURL(blob);
+            });
+
+            for (const model of CANDIDATE_MODELS) {
+                const res = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${state.apiKey}`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: [
+                                { inlineData: { mimeType, data: base64 } },
+                                { text: '音声を文字起こしして。話した言葉だけ出力して。前後の説明は不要。' }
+                            ]}]
+                        })
                     }
-                    el.livePreview.textContent = state.micFinalBuffer + interim;
-                };
-
-                rec.onerror = (e) => {
-                    if (e.error === 'not-allowed') {
-                        state.isRecording = false;
-                        showToast('マイクが許可されていません。アドレスバーのアイコンから許可してください', 'red');
-                        stopRecordingUI();
-                    } else if (e.error === 'no-speech' || e.error === 'aborted') {
-                        // auto-restart via onend
+                );
+                const data = await res.json();
+                if (res.ok) {
+                    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+                    if (text) {
+                        state.micFinalBuffer += (state.micFinalBuffer ? ' ' : '') + text;
+                        el.livePreview.textContent = state.micFinalBuffer;
                     } else {
-                        showToast(`マイクエラー: ${e.error}`, 'red');
+                        el.livePreview.textContent = state.micFinalBuffer || '話しかけてください（5秒ごとに変換）';
                     }
-                };
-
-                rec.onend = () => {
-                    if (state.isRecording) {
-                        startSR(); // restart SR only, waveform keeps running
-                        return;
-                    }
-                    finishRecording();
-                };
-
-                try { rec.start(); } catch (_) {}
+                    state.activeModel = model;
+                    return;
+                }
+                if (!isQuotaError(data)) break;
             }
-
-            startSR();
+            // chunk failed silently — restore display
+            el.livePreview.textContent = state.micFinalBuffer || '話しかけてください（5秒ごとに変換）';
         }
 
         function stopRecordingUI() {
-            stopWaveform();
             el.micBtn.className = 'mic-btn-idle w-20 h-20 md:w-16 md:h-16 rounded-full flex items-center justify-center text-3xl md:text-2xl text-indigo-300';
             el.micIcon.className = 'fas fa-microphone';
             el.waveform.style.display = 'none';
@@ -1094,12 +1079,18 @@
         function toggleSpeechRecognition() {
             if (state.isRecording) {
                 state.isRecording = false;
-                try { state.recognition?.stop(); } catch (_) {}
-                finishRecording();
+                if (micState.mediaRecorder?.state === 'recording') {
+                    micState.mediaRecorder.requestData(); // flush final chunk
+                    micState.mediaRecorder.stop();        // → onstop → finishRecording
+                } else {
+                    stopWaveform();
+                    micState.stream?.getTracks().forEach(t => t.stop());
+                    micState.stream = null;
+                    finishRecording();
+                }
             } else {
                 state.isRecording = true;
                 state.micFinalBuffer = '';
-                el.livePreview.textContent = '聞いています...';
                 startRecording();
             }
         }
