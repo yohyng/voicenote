@@ -109,7 +109,7 @@
                 <p class="text-slate-400 text-xs md:text-sm mt-1">音声を構造化データへ変換するワークフロー</p>
             </div>
             <div class="flex items-center gap-2 md:gap-3">
-                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.2.3</span>
+                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.3.0</span>
                 <button onclick="toggleSettings()" class="glass px-3 md:px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
                     <i class="fas fa-sliders text-indigo-400"></i>
                     <span class="hidden md:inline text-sm font-semibold">Settings</span>
@@ -369,7 +369,7 @@
         </main>
 
         <footer class="mt-10 md:mt-20 mb-6 md:mb-10 text-center opacity-30 text-[10px] tracking-widest">
-            AUDIO INSIGHT CONSOLE v2.2.3 &copy; 2024
+            AUDIO INSIGHT CONSOLE v2.3.0 &copy; 2024
         </footer>
     </div>
 
@@ -461,7 +461,7 @@
     </div>
 
     <script>
-        const APP_VERSION = 'v2.2.3';
+        const APP_VERSION = 'v2.3.0';
 
         const state = {
             file: null,
@@ -949,7 +949,97 @@
             document.getElementById('device-modal').classList.add('hidden');
         }
 
-        // ── MediaRecorder + Gemini mic input ─────────────────────────
+        // ── Offline audio queue (IndexedDB) ──────────────────────
+        const OFFLINE_DB = 'audioInsightOffline';
+        let offlineDb = null;
+
+        async function initOfflineDB() {
+            return new Promise((resolve) => {
+                const req = indexedDB.open(OFFLINE_DB, 1);
+                req.onupgradeneeded = e =>
+                    e.target.result.createObjectStore('queue', { keyPath: 'id', autoIncrement: true });
+                req.onsuccess = e => { offlineDb = e.target.result; resolve(); };
+                req.onerror = () => resolve(); // graceful degradation
+            });
+        }
+
+        function saveOfflineAudio(blob, mimeType) {
+            if (!offlineDb) return Promise.resolve(null);
+            return new Promise((resolve) => {
+                const tx = offlineDb.transaction('queue', 'readwrite');
+                const req = tx.objectStore('queue').add({ blob, mimeType, ts: Date.now() });
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => resolve(null);
+            });
+        }
+
+        function getOfflineQueue() {
+            if (!offlineDb) return Promise.resolve([]);
+            return new Promise((resolve) => {
+                const req = offlineDb.transaction('queue', 'readonly').objectStore('queue').getAll();
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => resolve([]);
+            });
+        }
+
+        function deleteOfflineAudio(id) {
+            if (!offlineDb) return;
+            offlineDb.transaction('queue', 'readwrite').objectStore('queue').delete(id);
+        }
+
+        async function processOfflineQueue() {
+            if (!navigator.onLine || !state.apiKey) return;
+            const items = await getOfflineQueue();
+            if (!items.length) return;
+            showToast(`オフライン録音 ${items.length}件を文字起こし中...`, 'indigo');
+            for (const item of items) {
+                await transcribeMicOffline(item.blob, item.mimeType);
+                deleteOfflineAudio(item.id);
+            }
+        }
+
+        async function transcribeMicOffline(blob, mimeType) {
+            const base64 = await blobToBase64(blob);
+            for (const model of CANDIDATE_MODELS) {
+                const res = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${state.apiKey}`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [
+                            { inlineData: { mimeType, data: base64 } },
+                            { text: MIC_TRANSCRIBE_PROMPT }
+                        ]}] })
+                    }
+                );
+                const data = await res.json();
+                if (res.ok) {
+                    const text = filterMicText(data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim());
+                    if (text) appendToSource(text);
+                    state.activeModel = model;
+                    return;
+                }
+                if (!isQuotaError(data)) break;
+            }
+        }
+
+        function blobToBase64(blob) {
+            return new Promise(resolve => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result.split(',')[1]);
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        const MIC_TRANSCRIBE_PROMPT = '音声を文字起こしして。発話内容のみ出力すること。無音・雑音のみ・話し声がない場合は何も出力しないこと。説明・謝罪・補足・提案は一切含めないこと。';
+
+        function filterMicText(text) {
+            if (!text) return '';
+            const refusals = ['私はテキスト', 'AIです', '音声ファイルをアップロード', '音声を直接', '文字起こしするには', '申し訳ありません', '聞き取れません', 'お手数', '入力していただけ', '提供してください', 'ご提供', 'こちらにご'];
+            return refusals.some(r => text.includes(r)) ? '' : text;
+        }
+
+        window.addEventListener('online', processOfflineQueue);
         const micState = { mediaRecorder: null, stream: null };
         let pendingChunk = Promise.resolve();
 
@@ -1001,20 +1091,26 @@
             micState.mediaRecorder.ondataavailable = (e) => {
                 if (e.data.size > 0) {
                     recordedChunks.push(e.data);
-                    // Chain transcription calls so they never overlap
                     pendingChunk = pendingChunk.then(async () => {
-                        const fullBlob = new Blob(recordedChunks, { type: effectiveMime });
-                        await transcribeMicChunk(fullBlob, effectiveMime);
+                        if (!navigator.onLine) {
+                            // Save full blob offline; will process when network returns
+                            await saveOfflineAudio(new Blob(recordedChunks, { type: effectiveMime }), effectiveMime);
+                            if (state.isRecording) el.livePreview.textContent = '📴 オフライン保存中...';
+                            return;
+                        }
+                        await transcribeMicChunk(new Blob(recordedChunks, { type: effectiveMime }), effectiveMime);
                     });
                 }
             };
 
             micState.mediaRecorder.onstop = async () => {
-                await pendingChunk; // wait for in-flight transcription
+                // Stream/waveform cleanup is immediate
                 stopWaveform();
                 micState.stream?.getTracks().forEach(t => t.stop());
                 micState.stream = null;
-                finishRecording();
+                // Wait for final transcription in background, then append
+                await pendingChunk;
+                applyRecordingResult();
             };
 
             micState.mediaRecorder.start(5000); // 5-second chunks
@@ -1022,13 +1118,11 @@
 
         async function transcribeMicChunk(blob, mimeType) {
             const lastText = state.micFinalBuffer;
-            el.livePreview.textContent = (lastText || '') + (lastText ? '\n' : '') + '🔄 文字起こし中...';
+            if (state.isRecording) {
+                el.livePreview.textContent = (lastText || '') + (lastText ? '\n' : '') + '🔄 文字起こし中...';
+            }
 
-            const base64 = await new Promise(resolve => {
-                const reader = new FileReader();
-                reader.onload = () => resolve(reader.result.split(',')[1]);
-                reader.readAsDataURL(blob);
-            });
+            const base64 = await blobToBase64(blob);
 
             for (const model of CANDIDATE_MODELS) {
                 const res = await fetch(
@@ -1036,28 +1130,28 @@
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{ parts: [
-                                { inlineData: { mimeType, data: base64 } },
-                                { text: '音声を文字起こしして。話された言葉だけを出力して。無音・聞き取れない・話し声がない場合は何も出力しないで。説明や補足は不要。' }
-                            ]}]
-                        })
+                        body: JSON.stringify({ contents: [{ parts: [
+                            { inlineData: { mimeType, data: base64 } },
+                            { text: MIC_TRANSCRIBE_PROMPT }
+                        ]}] })
                     }
                 );
                 const data = await res.json();
                 if (res.ok) {
-                    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-                    // Replace buffer with full cumulative transcription
+                    const text = filterMicText(data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim());
                     state.micFinalBuffer = text || lastText;
-                    el.livePreview.textContent = state.micFinalBuffer || '録音中...（5秒ごとに文字起こし）';
+                    if (state.isRecording) {
+                        el.livePreview.textContent = state.micFinalBuffer || '録音中...（5秒ごとに文字起こし）';
+                    }
                     state.activeModel = model;
                     return;
                 }
                 if (!isQuotaError(data)) break;
             }
-            // failed — restore last known text
             state.micFinalBuffer = lastText;
-            el.livePreview.textContent = lastText || '録音中...（5秒ごとに文字起こし）';
+            if (state.isRecording) {
+                el.livePreview.textContent = lastText || '録音中...（5秒ごとに文字起こし）';
+            }
         }
 
         function stopRecordingUI() {
@@ -1068,31 +1162,37 @@
             el.livePreview.classList.remove('typing-cursor');
         }
 
-        function finishRecording() {
+        function applyRecordingResult() {
             const text = state.micFinalBuffer.trim();
-            state.micFinalBuffer = ''; // clear before UI update to prevent race on rapid re-tap
-            stopRecordingUI();
+            state.micFinalBuffer = '';
             if (text) {
                 const hadContent = !!el.finalSource.value.trim();
                 appendToSource(text);
                 el.livePreview.textContent = hadContent ? '追記しました' : '入力を確定しました';
-                setTimeout(() => { el.livePreview.textContent = 'マイクボタンを押して話しかけてください'; }, 2000);
             } else {
                 el.livePreview.textContent = 'マイクボタンを押して話しかけてください';
             }
+            setTimeout(() => {
+                if (el.livePreview.textContent !== 'マイクボタンを押して話しかけてください') {
+                    el.livePreview.textContent = 'マイクボタンを押して話しかけてください';
+                }
+            }, 2000);
         }
 
         function toggleSpeechRecognition() {
             if (state.isRecording) {
                 state.isRecording = false;
+                // Immediate UI response — don't wait for Gemini
+                stopRecordingUI();
+                el.livePreview.textContent = '文字起こし処理中...';
                 if (micState.mediaRecorder?.state === 'recording') {
                     micState.mediaRecorder.requestData(); // flush final chunk
-                    micState.mediaRecorder.stop();        // → onstop → finishRecording
+                    micState.mediaRecorder.stop();        // onstop handles cleanup + append
                 } else {
                     stopWaveform();
                     micState.stream?.getTracks().forEach(t => t.stop());
                     micState.stream = null;
-                    finishRecording();
+                    applyRecordingResult();
                 }
             } else {
                 state.isRecording = true;
@@ -1362,12 +1462,13 @@
             navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard!'));
         }
 
-        // Service Worker registration
+        // Service Worker registration + offline DB init
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/sw.js').catch(() => {});
             });
         }
+        initOfflineDB().then(processOfflineQueue);
     </script>
 </body>
 </html>
