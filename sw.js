@@ -23,9 +23,11 @@ self.addEventListener('fetch', e => {
         return;
     }
 
-    // Cache-first for local assets
+    // Cache-first for local assets.
+    // For root path with query params (Web Share Target), match against '/'
+    const cacheKey = url.pathname === '/' ? '/' : e.request;
     e.respondWith(
-        caches.match(e.request).then(cached => cached || fetch(e.request).then(res => {
+        caches.match(cacheKey).then(cached => cached || fetch(e.request).then(res => {
             const clone = res.clone();
             caches.open(CACHE).then(c => c.put(e.request, clone));
             return res;
