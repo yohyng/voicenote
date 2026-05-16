@@ -109,7 +109,7 @@
                 <p class="text-slate-400 text-xs md:text-sm mt-1">音声を構造化データへ変換するワークフロー</p>
             </div>
             <div class="flex items-center gap-2 md:gap-3">
-                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.1.1</span>
+                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.1.2</span>
                 <button onclick="toggleSettings()" class="glass px-3 md:px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
                     <i class="fas fa-sliders text-indigo-400"></i>
                     <span class="hidden md:inline text-sm font-semibold">Settings</span>
@@ -362,7 +362,7 @@
         </main>
 
         <footer class="mt-10 md:mt-20 mb-6 md:mb-10 text-center opacity-30 text-[10px] tracking-widest">
-            AUDIO INSIGHT CONSOLE v2.1.1 &copy; 2024
+            AUDIO INSIGHT CONSOLE v2.1.2 &copy; 2024
         </footer>
     </div>
 
@@ -442,7 +442,7 @@
     </div>
 
     <script>
-        const APP_VERSION = 'v2.1.1';
+        const APP_VERSION = 'v2.1.2';
 
         const state = {
             file: null,
@@ -854,10 +854,6 @@
 
         async function startWaveform() {
             waveAudio.bars = Array.from(el.waveform.querySelectorAll('.wave-bar'));
-            // モバイルではSpeechRecognitionとの競合を避けCSSアニメーションのみ使用
-            const isMobile = navigator.maxTouchPoints > 0;
-            if (isMobile) { startWaveFallback(); return; }
-            await new Promise(r => setTimeout(r, 300));
             try {
                 waveAudio.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 waveAudio.ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -866,8 +862,10 @@
                 waveAudio.source = waveAudio.ctx.createMediaStreamSource(waveAudio.stream);
                 waveAudio.source.connect(waveAudio.analyser);
                 drawWave();
+                return true;
             } catch (e) {
                 startWaveFallback();
+                return false;
             }
         }
 
@@ -922,68 +920,65 @@
             return rec;
         }
 
-        function startRecording() {
+        async function startRecording() {
             if (!SpeechRec) {
                 showToast('このブラウザは音声入力に対応していません', 'red');
                 return;
             }
 
-            // 毎回新しいインスタンスを作る（使い回しによるバグ回避）
-            state.recognition = createRec();
-            const rec = state.recognition;
+            // Show recording UI immediately
+            el.micBtn.className = 'mic-btn-active w-20 h-20 md:w-16 md:h-16 rounded-full flex items-center justify-center text-3xl md:text-2xl text-white';
+            el.micIcon.className = 'fas fa-stop';
+            el.waveform.classList.remove('hidden');
+            el.waveform.style.display = 'flex';
+            el.recBadge.style.display = 'flex';
+            el.livePreview.classList.add('typing-cursor');
 
-            rec.onstart = () => {
-                if (!state.isRecording) return; // 停止ボタン後の遅延起動を無視
-                el.micBtn.className = 'mic-btn-active w-20 h-20 md:w-16 md:h-16 rounded-full flex items-center justify-center text-3xl md:text-2xl text-white';
-                el.micIcon.className = 'fas fa-stop';
-                el.waveform.classList.remove('hidden');
-                el.waveform.style.display = 'flex';
-                el.recBadge.style.display = 'flex';
-                el.livePreview.classList.add('typing-cursor');
-                startWaveform();
-            };
+            // Start waveform FIRST to claim mic permission before SpeechRecognition
+            await startWaveform();
 
-            rec.onresult = (e) => {
-                let interim = '';
-                for (let i = e.resultIndex; i < e.results.length; i++) {
-                    if (e.results[i].isFinal) {
-                        state.micFinalBuffer += e.results[i][0].transcript;
-                    } else {
-                        interim += e.results[i][0].transcript;
+            // Inner function so auto-restarts reuse same handlers without touching waveform
+            function startSR() {
+                if (!state.isRecording) return;
+                const rec = createRec();
+                state.recognition = rec;
+
+                rec.onresult = (e) => {
+                    let interim = '';
+                    for (let i = e.resultIndex; i < e.results.length; i++) {
+                        if (e.results[i].isFinal) {
+                            state.micFinalBuffer += e.results[i][0].transcript;
+                        } else {
+                            interim += e.results[i][0].transcript;
+                        }
                     }
-                }
-                el.livePreview.textContent = state.micFinalBuffer + interim;
-            };
+                    el.livePreview.textContent = state.micFinalBuffer + interim;
+                };
 
-            rec.onerror = (e) => {
-                if (e.error === 'not-allowed') {
-                    state.isRecording = false;
-                    showToast('マイクが許可されていません。アドレスバーのアイコンから許可してください', 'red');
-                    stopRecordingUI();
-                } else if (e.error === 'no-speech' || e.error === 'aborted') {
-                    // 無音・中断は自動再起動で対応（下のonendに任せる）
-                } else {
-                    showToast(`マイクエラー: ${e.error}`, 'red');
-                }
-            };
+                rec.onerror = (e) => {
+                    if (e.error === 'not-allowed') {
+                        state.isRecording = false;
+                        showToast('マイクが許可されていません。アドレスバーのアイコンから許可してください', 'red');
+                        stopRecordingUI();
+                    } else if (e.error === 'no-speech' || e.error === 'aborted') {
+                        // auto-restart via onend
+                    } else {
+                        showToast(`マイクエラー: ${e.error}`, 'red');
+                    }
+                };
 
-            rec.onend = () => {
-                // まだ録音継続中なら自動再起動（Android continuous対応）
-                if (state.isRecording) {
-                    try { state.recognition = createRec(); attachHandlers(state.recognition); state.recognition.start(); } catch (_) {}
-                    return;
-                }
-                finishRecording();
-            };
+                rec.onend = () => {
+                    if (state.isRecording) {
+                        startSR(); // restart SR only, waveform keeps running
+                        return;
+                    }
+                    finishRecording();
+                };
 
-            rec.start();
-        }
+                try { rec.start(); } catch (_) {}
+            }
 
-        function attachHandlers(rec) {
-            rec.onstart   = state.recognition.onstart;
-            rec.onresult  = state.recognition.onresult;
-            rec.onerror   = state.recognition.onerror;
-            rec.onend     = state.recognition.onend;
+            startSR();
         }
 
         function stopRecordingUI() {
