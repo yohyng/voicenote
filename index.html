@@ -109,7 +109,7 @@
                 <p class="text-slate-400 text-xs md:text-sm mt-1">音声を構造化データへ変換するワークフロー</p>
             </div>
             <div class="flex items-center gap-2 md:gap-3">
-                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.1.3</span>
+                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.1.4</span>
                 <button onclick="toggleSettings()" class="glass px-3 md:px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
                     <i class="fas fa-sliders text-indigo-400"></i>
                     <span class="hidden md:inline text-sm font-semibold">Settings</span>
@@ -369,7 +369,7 @@
         </main>
 
         <footer class="mt-10 md:mt-20 mb-6 md:mb-10 text-center opacity-30 text-[10px] tracking-widest">
-            AUDIO INSIGHT CONSOLE v2.1.3 &copy; 2024
+            AUDIO INSIGHT CONSOLE v2.1.4 &copy; 2024
         </footer>
     </div>
 
@@ -461,7 +461,7 @@
     </div>
 
     <script>
-        const APP_VERSION = 'v2.1.3';
+        const APP_VERSION = 'v2.1.4';
 
         const state = {
             file: null,
@@ -873,6 +873,13 @@
             bars: null
         };
 
+        // Activity level for SR-driven waveform (0.0–1.0, decays over time)
+        let waveActivity = 0;
+
+        function boostWave(amount = 0.6) {
+            waveActivity = Math.min(1, waveActivity + amount);
+        }
+
         async function startWaveform() {
             waveAudio.bars = Array.from(el.waveform.querySelectorAll('.wave-bar'));
             try {
@@ -888,19 +895,23 @@
                 drawWave();
                 return true;
             } catch (e) {
-                startWaveFallback();
+                // getUserMedia failed (mic held by SR on Android) → SR-activity driven animation
+                startWaveSpeechMode();
                 return false;
             }
         }
 
-        function startWaveFallback() {
+        // Waveform driven by SR speech events instead of raw audio data
+        function startWaveSpeechMode() {
             if (!waveAudio.bars) return;
             let t = 0;
             waveAudio.rafId = setInterval(() => {
-                t += 0.15;
+                t += 0.12;
+                waveActivity *= 0.88; // decay
                 waveAudio.bars.forEach((bar, i) => {
-                    const pct = 20 + Math.abs(Math.sin(t + i * 0.5)) * 70;
-                    bar.style.height = `${pct}%`;
+                    const idle = 8 + Math.abs(Math.sin(t + i * 0.7)) * 8;
+                    const active = waveActivity * 75 * Math.abs(Math.sin(t * 2 + i * 0.5));
+                    bar.style.height = `${idle + active}%`;
                 });
             }, 50);
         }
@@ -988,7 +999,7 @@
             return rec;
         }
 
-        async function startRecording() {
+        function startRecording() {
             if (!SpeechRec) {
                 showToast('このブラウザは音声入力に対応していません', 'red');
                 return;
@@ -1002,16 +1013,25 @@
             el.recBadge.style.display = 'flex';
             el.livePreview.classList.add('typing-cursor');
 
-            // Start waveform FIRST to claim mic permission before SpeechRecognition
-            await startWaveform();
+            waveActivity = 0;
 
-            // Inner function so auto-restarts reuse same handlers without touching waveform
+            // SR-first: SpeechRecognition gets mic priority on Android.
+            // Waveform starts after SR's onstart fires; if getUserMedia fails because
+            // SR holds the mic exclusively, we fall back to SR-activity-driven animation.
             function startSR() {
                 if (!state.isRecording) return;
                 const rec = createRec();
                 state.recognition = rec;
 
+                rec.onstart = () => {
+                    // Start waveform once SR has the mic; guard against re-init on restarts
+                    if (!waveAudio.rafId) startWaveform();
+                };
+
+                rec.onspeechstart = () => boostWave(0.8);
+
                 rec.onresult = (e) => {
+                    boostWave(0.5);
                     let interim = '';
                     for (let i = e.resultIndex; i < e.results.length; i++) {
                         if (e.results[i].isFinal) {
