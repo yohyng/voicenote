@@ -109,7 +109,7 @@
                 <p class="text-slate-400 text-xs md:text-sm mt-1">音声を構造化データへ変換するワークフロー</p>
             </div>
             <div class="flex items-center gap-2 md:gap-3">
-                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.4.0</span>
+                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.5.0</span>
                 <button onclick="toggleSettings()" class="glass px-3 md:px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
                     <i class="fas fa-sliders text-indigo-400"></i>
                     <span class="hidden md:inline text-sm font-semibold">Settings</span>
@@ -369,7 +369,7 @@
         </main>
 
         <footer class="mt-10 md:mt-20 mb-6 md:mb-10 text-center opacity-30 text-[10px] tracking-widest">
-            AUDIO INSIGHT CONSOLE v2.4.0 &copy; 2024
+            AUDIO INSIGHT CONSOLE v2.5.0 &copy; 2024
         </footer>
     </div>
 
@@ -448,6 +448,24 @@
                     </div>
                 </div>
 
+                <!-- Transcription Engine -->
+                <div class="border-t border-slate-700/60 pt-4">
+                    <p class="text-[10px] font-bold text-slate-500 tracking-widest mb-3">TRANSCRIPTION ENGINE</p>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button id="engine-gemini" onclick="setEngine('gemini')"
+                            class="py-3 px-4 rounded-xl text-xs font-bold border transition-all text-left">
+                            <i class="fas fa-cloud mr-2"></i>Gemini API<br>
+                            <span class="text-[10px] font-normal opacity-60">高精度・話者分離</span>
+                        </button>
+                        <button id="engine-whisper" onclick="setEngine('whisper')"
+                            class="py-3 px-4 rounded-xl text-xs font-bold border transition-all text-left">
+                            <i class="fas fa-lock mr-2"></i>Whisper (ローカル)<br>
+                            <span class="text-[10px] font-normal opacity-60">完全プライベート</span>
+                        </button>
+                    </div>
+                    <p id="engine-note" class="text-[10px] text-slate-500 mt-2"></p>
+                </div>
+
                 <button onclick="saveAllSettings()" class="w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/30">Save Configuration</button>
                 <button onclick="toggleSettings()" class="w-full py-2 text-slate-500 text-sm font-medium">Cancel</button>
             </div>
@@ -461,14 +479,15 @@
     </div>
 
     <script>
-        const APP_VERSION = 'v2.4.0';
+        const APP_VERSION = 'v2.5.0';
 
         const state = {
             file: null,
             apiKey: localStorage.getItem('GEMINI_API_KEY') || '',
-            activeModel: 'gemini-2.5-flash', // updated on successful call
+            activeModel: 'gemini-2.5-flash',
             notionToken: localStorage.getItem('NOTION_TOKEN') || '',
             notionDbId: localStorage.getItem('NOTION_DB_ID') || '',
+            transcribeEngine: localStorage.getItem('TRANSCRIBE_ENGINE') || 'gemini',
             recognition: null,
             isRecording: false,
             micFinalBuffer: '',
@@ -539,6 +558,7 @@
                 document.getElementById('api-key-input').value = state.apiKey;
                 document.getElementById('notion-token-input').value = state.notionToken;
                 document.getElementById('notion-db-input').value = state.notionDbId;
+                setEngine(state.transcribeEngine);
             }
         }
 
@@ -549,8 +569,29 @@
             localStorage.setItem('NOTION_TOKEN', state.notionToken);
             state.notionDbId = document.getElementById('notion-db-input').value.trim().replace(/-/g, '');
             localStorage.setItem('NOTION_DB_ID', state.notionDbId);
+            localStorage.setItem('TRANSCRIBE_ENGINE', state.transcribeEngine);
             toggleSettings();
             showToast('Settings Saved');
+        }
+
+        function setEngine(engine) {
+            state.transcribeEngine = engine;
+            const geminiBtn = document.getElementById('engine-gemini');
+            const whisperBtn = document.getElementById('engine-whisper');
+            const note = document.getElementById('engine-note');
+            const active = 'bg-indigo-600/30 border-indigo-500/50 text-indigo-200';
+            const idle = 'bg-slate-900/60 border-slate-700/60 text-slate-300';
+            geminiBtn.className = geminiBtn.className.replace(/bg-\S+|border-\S+|text-\S+/g, '');
+            whisperBtn.className = whisperBtn.className.replace(/bg-\S+|border-\S+|text-\S+/g, '');
+            if (engine === 'gemini') {
+                geminiBtn.classList.add(...active.split(' '));
+                whisperBtn.classList.add(...idle.split(' '));
+                note.textContent = 'Gemini APIキーが必要。話者分離・タイムスタンプ対応。';
+            } else {
+                whisperBtn.classList.add(...active.split(' '));
+                geminiBtn.classList.add(...idle.split(' '));
+                note.textContent = '初回のみモデルをダウンロード（約240MB）。以降はオフライン動作。';
+            }
         }
 
         // ── API Test ──────────────────────────────────────────────
@@ -705,8 +746,140 @@
             document.getElementById('transcribe-bar').style.width = `${pct}%`;
         }
 
+        // ── Whisper (local) transcription ────────────────────────
+        let whisperPipeline = null;
+
+        async function transcribeWithWhisper() {
+            const transcribeBtn = document.getElementById('transcribe-btn');
+            const progressPanel = document.getElementById('transcribe-progress');
+            const statusMsg = document.getElementById('transcribe-status-msg');
+            const timerEl = document.getElementById('transcribe-timer');
+            const clearBtn = document.getElementById('clear-file-btn');
+            const cycleEl = document.getElementById('transcribe-cycle-msg');
+
+            ['read','send','ai','done'].forEach(s => {
+                const el = document.getElementById(`prog-step-${s}`);
+                el.className = 'flex items-center gap-1.5 text-[10px] font-bold text-slate-600';
+                el.querySelector('i').className = 'fas fa-circle-notch text-[8px]';
+            });
+
+            transcribeBtn.style.display = 'none';
+            clearBtn.disabled = true;
+            progressPanel.style.display = 'flex';
+            setTranscribePct(0);
+
+            let elapsed = 0;
+            const timerInterval = setInterval(() => {
+                elapsed++;
+                timerEl.textContent = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed/60)}m${elapsed%60}s`;
+            }, 1000);
+
+            try {
+                // Step 1: Load model
+                setProgStep('read');
+                if (!whisperPipeline) {
+                    statusMsg.textContent = 'Whisperモデルを読み込み中...';
+                    cycleEl.textContent = '初回のみダウンロードが必要です（約240MB）';
+                    const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+                    whisperPipeline = await pipeline(
+                        'automatic-speech-recognition',
+                        'Xenova/whisper-small',
+                        {
+                            progress_callback: (p) => {
+                                if (p.status === 'downloading') {
+                                    const pct = Math.round((p.loaded / p.total) * 30);
+                                    setTranscribePct(pct);
+                                    statusMsg.textContent = `モデルをダウンロード中... ${Math.round(p.loaded/1e6)}MB / ${Math.round(p.total/1e6)}MB`;
+                                }
+                            }
+                        }
+                    );
+                }
+                await tickTo(0, 30, 300);
+
+                // Step 2: Decode audio
+                setProgStep('send');
+                statusMsg.textContent = '音声を解析中...';
+                cycleEl.textContent = '';
+                await tickTo(30, 40, 300);
+
+                const arrayBuffer = await state.file.arrayBuffer();
+                const audioCtx = new AudioContext({ sampleRate: 16000 });
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                audioCtx.close();
+                const audioData = audioBuffer.getChannelData(0); // mono 16kHz Float32Array
+
+                // Step 3: Transcribe
+                setProgStep('ai');
+                statusMsg.textContent = 'Whisperで文字起こし中...';
+                cycleEl.textContent = 'ローカルで処理中（データは外部に送信されません）';
+                await tickTo(40, 50, 200);
+
+                const result = await whisperPipeline(audioData, {
+                    language: 'japanese',
+                    task: 'transcribe',
+                    return_timestamps: true,
+                    chunk_length_s: 30,
+                    stride_length_s: 5,
+                    callback_function: (beams) => {
+                        // Update progress based on timestamp progression
+                        const duration = audioBuffer.duration;
+                        const ts = beams?.[0]?.output_token_ids?.length;
+                        if (ts && duration) {
+                            const est = Math.min(95, 50 + Math.round((ts / (duration * 2)) * 45));
+                            setTranscribePct(est);
+                        }
+                    }
+                });
+
+                await tickTo(95, 100, 200);
+
+                // Format output with timestamps
+                let transcript = '';
+                if (result.chunks?.length) {
+                    transcript = result.chunks.map(c => {
+                        const t = c.timestamp?.[0] ?? 0;
+                        const h = Math.floor(t / 3600).toString().padStart(2, '0');
+                        const m = Math.floor((t % 3600) / 60).toString().padStart(2, '0');
+                        const s = Math.floor(t % 60).toString().padStart(2, '0');
+                        return `[${h}:${m}:${s}] ${c.text.trim()}`;
+                    }).join('\n');
+                } else {
+                    transcript = result.text?.trim() || '';
+                }
+
+                if (!transcript) throw new Error('文字起こし結果が空です');
+
+                setProgStep('done');
+                statusMsg.textContent = `完了 — ${elapsed}秒`;
+                cycleEl.textContent = '文字起こし完了！（Whisperローカル処理）';
+                await new Promise(r => setTimeout(r, 600));
+
+                appendToSource(transcript);
+                showToast('文字起こし完了（Whisper）', 'green');
+
+            } catch (err) {
+                statusMsg.textContent = `エラー: ${err.message}`;
+                statusMsg.classList.add('text-red-400');
+                setTimeout(() => {
+                    progressPanel.style.display = 'none';
+                    transcribeBtn.style.display = 'flex';
+                    clearBtn.disabled = false;
+                }, 3000);
+            } finally {
+                clearInterval(timerInterval);
+                progressPanel.style.display = 'none';
+                transcribeBtn.style.display = 'flex';
+                clearBtn.disabled = false;
+            }
+        }
+
         async function transcribeFile() {
             if (!state.file) return;
+            if (state.transcribeEngine === 'whisper') {
+                await transcribeWithWhisper();
+                return;
+            }
             if (!state.apiKey) {
                 showToast('APIキーを設定してください', 'red');
                 return;
