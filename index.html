@@ -109,7 +109,7 @@
                 <p class="text-slate-400 text-xs md:text-sm mt-1">音声を構造化データへ変換するワークフロー</p>
             </div>
             <div class="flex items-center gap-2 md:gap-3">
-                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.5.2</span>
+                <span class="text-[10px] font-bold tracking-widest text-slate-600 border border-slate-700 rounded-full px-2 md:px-3 py-1">v2.6.0</span>
                 <button onclick="toggleSettings()" class="glass px-3 md:px-4 py-2 rounded-xl hover:bg-slate-800 transition-all flex items-center gap-2">
                     <i class="fas fa-sliders text-indigo-400"></i>
                     <span class="hidden md:inline text-sm font-semibold">Settings</span>
@@ -138,6 +138,50 @@
                             <i class="fas fa-cloud-upload-alt text-2xl text-slate-500 group-hover:text-indigo-400 mb-2 block transition-colors"></i>
                             <p class="text-xs text-slate-400">クリックして音声ファイルを選択</p>
                             <p class="text-[10px] text-slate-600 mt-1">mp3 / wav / m4a / ogg</p>
+                        </div>
+
+                        <!-- Meeting record button -->
+                        <div id="meet-rec-entry" class="flex flex-col gap-2">
+                            <div class="flex items-center gap-2">
+                                <div class="flex-1 h-px bg-slate-700/50"></div>
+                                <span class="text-[10px] text-slate-600">または</span>
+                                <div class="flex-1 h-px bg-slate-700/50"></div>
+                            </div>
+                            <button id="meet-rec-btn" onclick="startMeetingRecord()"
+                                class="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-slate-700 hover:border-indigo-500/40 text-slate-400 hover:text-indigo-300 text-xs font-bold transition-all active:scale-95">
+                                <i class="fas fa-circle text-rose-500 text-[8px]"></i> 会議を録音する
+                            </button>
+                        </div>
+
+                        <!-- Meeting recording panel (shown while recording) -->
+                        <div id="meet-rec-panel" class="hidden flex-col gap-3 rounded-2xl bg-rose-500/5 border border-rose-500/20 p-4">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-2 h-2 bg-rose-500 rounded-full animate-pulse inline-block"></span>
+                                    <span class="text-xs font-bold text-rose-300">録音中</span>
+                                </div>
+                                <span id="meet-rec-timer" class="text-sm font-mono font-bold text-slate-300">0:00</span>
+                            </div>
+                            <div class="space-y-2">
+                                <div class="flex items-center gap-2">
+                                    <i class="fas fa-microphone text-[10px] text-indigo-400 w-4 text-center"></i>
+                                    <span class="text-[10px] text-slate-500 w-16 flex-shrink-0">マイク</span>
+                                    <div class="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                        <div id="meet-mic-level" class="h-full bg-indigo-500 rounded-full transition-all duration-75" style="width:0%"></div>
+                                    </div>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <i class="fas fa-desktop text-[10px] text-purple-400 w-4 text-center"></i>
+                                    <span class="text-[10px] text-slate-500 w-16 flex-shrink-0">システム音</span>
+                                    <div class="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                        <div id="meet-sys-level" class="h-full bg-purple-500 rounded-full transition-all duration-75" style="width:0%"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <button onclick="stopMeetingRecord()"
+                                class="flex items-center justify-center gap-2 w-full py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 text-xs font-bold transition-all active:scale-95">
+                                <i class="fas fa-stop"></i> 録音を停止する
+                            </button>
                         </div>
 
                         <!-- File info + processing status -->
@@ -374,7 +418,7 @@
         </main>
 
         <footer class="mt-10 md:mt-20 mb-6 md:mb-10 text-center opacity-30 text-[10px] tracking-widest">
-            AUDIO INSIGHT CONSOLE v2.5.2 &copy; 2024
+            AUDIO INSIGHT CONSOLE v2.6.0 &copy; 2024
         </footer>
     </div>
 
@@ -484,7 +528,7 @@
     </div>
 
     <script>
-        const APP_VERSION = 'v2.5.2';
+        const APP_VERSION = 'v2.6.0';
 
         const state = {
             file: null,
@@ -701,6 +745,8 @@
             document.getElementById('clear-file-btn').disabled = false;
             document.getElementById('transcribe-btn').style.display = 'flex';
             document.getElementById('transcribe-progress').style.display = 'none';
+            document.getElementById('drop-area').style.display = '';
+            document.getElementById('meet-rec-entry').style.display = 'flex';
         }
 
         // ── Transcription progress helpers ────────────────────────
@@ -752,7 +798,115 @@
             document.getElementById('transcribe-bar').style.width = `${pct}%`;
         }
 
-        // ── Whisper (local) transcription ────────────────────────
+        // ── Meeting recording ─────────────────────────────────────
+        const meetRec = {
+            ctx: null, dest: null, recorder: null, chunks: [],
+            sysStream: null, micStream: null,
+            micAnalyser: null, sysAnalyser: null,
+            rafId: null, timerInterval: null, elapsed: 0
+        };
+
+        async function startMeetingRecord() {
+            try {
+                const sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: false });
+                if (!sysStream.getAudioTracks().length) {
+                    sysStream.getTracks().forEach(t => t.stop());
+                    showToast('システム音声が取得できませんでした。「システムの音声を共有する」をオンにしてください', 'red');
+                    return;
+                }
+                const micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+
+                meetRec.sysStream = sysStream;
+                meetRec.micStream = micStream;
+                meetRec.ctx  = new AudioContext();
+                meetRec.dest = meetRec.ctx.createMediaStreamDestination();
+
+                const sysSource = meetRec.ctx.createMediaStreamSource(sysStream);
+                const micSource = meetRec.ctx.createMediaStreamSource(micStream);
+                meetRec.sysAnalyser = meetRec.ctx.createAnalyser();
+                meetRec.micAnalyser = meetRec.ctx.createAnalyser();
+                meetRec.sysAnalyser.fftSize = 32;
+                meetRec.micAnalyser.fftSize = 32;
+                sysSource.connect(meetRec.sysAnalyser);
+                micSource.connect(meetRec.micAnalyser);
+                meetRec.sysAnalyser.connect(meetRec.dest);
+                meetRec.micAnalyser.connect(meetRec.dest);
+
+                const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                    ? 'audio/webm;codecs=opus' : 'audio/webm';
+                meetRec.chunks   = [];
+                meetRec.recorder = new MediaRecorder(meetRec.dest.stream, { mimeType });
+                meetRec.recorder.ondataavailable = e => { if (e.data.size > 0) meetRec.chunks.push(e.data); };
+                meetRec.recorder.start(1000);
+
+                // Show recording panel
+                document.getElementById('drop-area').style.display       = 'none';
+                document.getElementById('meet-rec-entry').style.display  = 'none';
+                document.getElementById('file-info').style.display       = 'none';
+                document.getElementById('meet-rec-panel').style.display  = 'flex';
+
+                // Timer
+                meetRec.elapsed = 0;
+                meetRec.timerInterval = setInterval(() => {
+                    meetRec.elapsed++;
+                    const m = Math.floor(meetRec.elapsed / 60);
+                    const s = meetRec.elapsed % 60;
+                    document.getElementById('meet-rec-timer').textContent = `${m}:${s.toString().padStart(2, '0')}`;
+                }, 1000);
+
+                // Level meters
+                const buf = new Uint8Array(16);
+                function updateLevels() {
+                    meetRec.rafId = requestAnimationFrame(updateLevels);
+                    meetRec.micAnalyser.getByteFrequencyData(buf);
+                    const micLv = Math.min(100, buf.reduce((a, b) => a + b, 0) / buf.length / 2.55 * 2);
+                    meetRec.sysAnalyser.getByteFrequencyData(buf);
+                    const sysLv = Math.min(100, buf.reduce((a, b) => a + b, 0) / buf.length / 2.55 * 2);
+                    document.getElementById('meet-mic-level').style.width = micLv + '%';
+                    document.getElementById('meet-sys-level').style.width = sysLv + '%';
+                }
+                updateLevels();
+
+                // Auto-stop when user ends screen share
+                sysStream.getAudioTracks()[0].onended = () => stopMeetingRecord();
+
+            } catch (err) {
+                if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
+                    showToast(`録音エラー: ${err.message}`, 'red');
+                }
+            }
+        }
+
+        function stopMeetingRecord() {
+            if (!meetRec.recorder || meetRec.recorder.state === 'inactive') return;
+            cancelAnimationFrame(meetRec.rafId);
+            clearInterval(meetRec.timerInterval);
+
+            meetRec.recorder.onstop = () => {
+                const blob  = new Blob(meetRec.chunks, { type: 'audio/webm' });
+                const now   = new Date();
+                const stamp = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+                const fname = `会議録音_${stamp}.webm`;
+                state.file  = new File([blob], fname, { type: 'audio/webm' });
+
+                const secs = meetRec.elapsed;
+                const dur  = secs < 60 ? `${secs}秒` : `${Math.floor(secs/60)}分${secs%60}秒`;
+                document.getElementById('info-name').textContent = fname;
+                document.getElementById('info-size').textContent = `${(blob.size/1024/1024).toFixed(1)} MB · ${dur}`;
+                document.getElementById('file-info').style.display      = 'flex';
+                document.getElementById('meet-rec-panel').style.display = 'none';
+                document.getElementById('meet-rec-entry').style.display = 'flex';
+                showToast(`録音完了（${dur}）`, 'green');
+            };
+
+            meetRec.recorder.stop();
+            meetRec.sysStream?.getTracks().forEach(t => t.stop());
+            meetRec.micStream?.getTracks().forEach(t => t.stop());
+            meetRec.ctx?.close();
+            meetRec.ctx = meetRec.recorder = null;
+        }
+
+        // ── Whisper (local) transcription ─────────────────────────
         let whisperPipeline = null;
         let whisperPipelineModel = null;
 
